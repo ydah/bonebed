@@ -14,6 +14,7 @@ module Bonebed
       @timeout = timeout
       @offline = offline
       @collector = collector
+      @bootstrap_exec = true
     end
 
     def run
@@ -44,6 +45,7 @@ module Bonebed
     end
 
     def handle_open(request, syscall)
+      @collector.record_notification
       @collector.record_open(Decoder::Openat.call(request, syscall:))
     rescue StandardError => error
       @collector.record_error(syscall, error)
@@ -52,8 +54,10 @@ module Bonebed
     end
 
     def handle_connect(request)
+      @collector.record_notification
       bytes = request.read(request.args.fetch(1), request.args.fetch(2))
-      @collector.record_network(Decoder::Connect.call(bytes))
+      event = Decoder::Connect.call(bytes)
+      @collector.record_network(event) if event
     rescue StandardError => error
       @collector.record_error(:connect, error)
     ensure
@@ -63,7 +67,12 @@ module Bonebed
     end
 
     def handle_execve(request)
-      @collector.record_exec(Decoder::Execve.call(request))
+      @collector.record_notification
+      if @bootstrap_exec
+        @bootstrap_exec = false
+      else
+        @collector.record_exec(Decoder::Execve.call(request))
+      end
     rescue StandardError => error
       @collector.record_error(:execve, error)
     ensure

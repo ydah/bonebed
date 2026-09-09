@@ -9,12 +9,15 @@ module Bonebed
       case arguments.shift
       when "doctor"
         Doctor.new.run ? 0 : 1
+      when "baseline"
+        baseline(arguments)
       when "dig"
         dig(arguments)
       when nil, "help", "--help", "-h"
         puts <<~HELP
           Usage:
             bonebed doctor
+            bonebed baseline [--refresh]
             bonebed dig GEM [--phase require|install] [--version VERSION] [--offline]
         HELP
         0
@@ -40,6 +43,15 @@ module Bonebed
       raise ArgumentError, "unexpected arguments: #{arguments.join(" ")}" unless arguments.empty?
 
       puts Dig.new(**options.slice(:results_dir, :timeout, :offline)).run(name, phase: options[:phase], version: options[:version])
+      0
+    end
+
+    def self.baseline(arguments)
+      refresh = false
+      OptionParser.new { |parser| parser.on("--refresh") { refresh = true } }.parse!(arguments)
+      raise ArgumentError, "unexpected arguments: #{arguments.join(" ")}" unless arguments.empty?
+
+      puts Baseline.new.capture(refresh:).id
       0
     end
   end

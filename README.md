@@ -41,7 +41,13 @@ bin/dev bundle exec exe/bonebed dig json
 bin/dev bundle exec exe/bonebed dig json --phase install
 ```
 
-Manifests are written to `results/`. Use `--offline` to return `ENETUNREACH` for every observed connection. This is a compatibility check, not a security sandbox.
+Manifests are written to `results/`. The first run records a Ruby/Bundler baseline in `.bonebed/baselines`; refresh it after environment changes with:
+
+```bash
+bin/dev bundle exec exe/bonebed baseline --refresh
+```
+
+Use `--offline` to return `ENETUNREACH` for every observed connection. This is a compatibility check, not a security sandbox.
 
 ## Development
 

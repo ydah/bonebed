@@ -14,16 +14,17 @@ module Bonebed
 
     def record_open(event)
       @files.fetch(event.fetch(:mode))[event.fetch(:path)] += 1
-      @roundtrips += 1
     end
 
     def record_network(event)
       @network[event.freeze] += 1
-      @roundtrips += 1
     end
 
     def record_exec(event)
       @executions[[event.fetch(:path), event.fetch(:argv).freeze].freeze] += 1
+    end
+
+    def record_notification
       @roundtrips += 1
     end
 

@@ -10,6 +10,7 @@ RSpec.describe Bonebed::Decoder do
       expect(described_class.call(ipv4)).to eq(family: "inet", addr: "127.0.0.1", port: 443)
       expect(described_class.call(ipv6)).to eq(family: "inet6", addr: "2001:db8::1", port: 443)
       expect(described_class.call(unix)).to eq(family: "unix", path: "/tmp/bonebed.sock")
+      expect(described_class.call([0].pack("S<"))).to be_nil
     end
   end
 
