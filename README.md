@@ -32,6 +32,17 @@ gem install bonebed
 bonebed doctor
 ```
 
+## Observe a gem
+
+Run Bonebed inside the development container so third-party code is not executed directly on the host:
+
+```bash
+bin/dev bundle exec exe/bonebed dig json
+bin/dev bundle exec exe/bonebed dig json --phase install
+```
+
+Manifests are written to `results/`. Use `--offline` to return `ENETUNREACH` for every observed connection. This is a compatibility check, not a security sandbox.
+
 ## Development
 
 Build the Linux development image once, install dependencies, and run the checks inside it:
