@@ -5,7 +5,11 @@ RSpec.describe Bonebed do
     expect(Bonebed::VERSION).not_to be nil
   end
 
-  it "does something useful" do
-    expect(false).to eq(true)
+  it "reports platform support without crashing" do
+    output = StringIO.new
+    doctor = Bonebed::Doctor.new(output:)
+
+    expect { doctor.run }.not_to raise_error
+    expect(output.string).to include("kernel", "arch", "SECCOMP_RET_USER_NOTIF")
   end
 end
