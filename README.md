@@ -49,6 +49,18 @@ bin/dev bundle exec exe/bonebed baseline --refresh
 
 Use `--offline` to return `ENETUNREACH` for every observed connection. This is a compatibility check, not a security sandbox.
 
+## Survey and report
+
+Survey RubyGems.org's all-time download ranking, a newline-separated gem list, or a lockfile. Existing result files are skipped so interrupted surveys can resume.
+
+```bash
+bin/dev bundle exec exe/bonebed survey --top 100
+bin/dev bundle exec exe/bonebed survey --gemfile Gemfile.lock --phase require
+bin/dev bundle exec exe/bonebed report results --format md
+```
+
+Top surveys default to the install phase because those gems need not already be installed. A list file accepts `NAME` or `NAME VERSION` on each line.
+
 ## Development
 
 Build the Linux development image once, install dependencies, and run the checks inside it:

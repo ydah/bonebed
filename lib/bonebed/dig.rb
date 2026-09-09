@@ -13,8 +13,11 @@ require_relative "session"
 module Bonebed
   class Dig
     PHASES = %w[require install].freeze
+    attr_reader :results_dir
 
     def initialize(results_dir: "results", timeout: 30, offline: false, baseline: Baseline.new(timeout:))
+      raise ArgumentError, "timeout must be positive" unless timeout.positive?
+
       @results_dir = results_dir
       @timeout = timeout
       @offline = offline
@@ -22,23 +25,39 @@ module Bonebed
     end
 
     def run(name, phase: "require", version: nil)
-      validate!(name, phase)
+      validate!(name, phase, version)
       manifest = if phase == "install"
         Bundler.with_unbundled_env { install(name, version, @baseline.capture) }
       else
         require_gem(name, version, @baseline.capture)
       end
       FileUtils.mkdir_p(@results_dir)
-      path = File.join(@results_dir, "#{name}-#{manifest.dig("gem", "version")}-#{phase}.json")
+      path = File.join(@results_dir, "#{name}-#{safe_component(manifest.dig("gem", "version"))}-#{phase}.json")
       File.write(path, "#{JSON.pretty_generate(manifest)}\n")
       path
     end
 
+    def write_failure(name, phase:, version:, error:)
+      validate!(name, phase)
+      FileUtils.mkdir_p(@results_dir)
+      path = File.join(@results_dir, "#{name}-#{safe_component(version)}-#{phase}.json")
+      data = manifest(name, version, phase, empty_observation(error), Baseline::Result.new(id: nil, observation: empty_observation))
+      File.write(path, "#{JSON.pretty_generate(data)}\n")
+      path
+    end
+
+    def result_exists?(name, phase:, version: nil)
+      validate!(name, phase, version)
+      suffix = version ? safe_component(version) : "*"
+      !Dir[File.join(@results_dir, "#{name}-#{suffix}-#{phase}.json")].empty?
+    end
+
     private
 
-    def validate!(name, phase)
+    def validate!(name, phase, version = nil)
       raise ArgumentError, "gem name is required" unless name&.match?(/\A[a-zA-Z0-9_-]+\z/)
       raise ArgumentError, "phase must be require or install" unless PHASES.include?(phase)
+      raise ArgumentError, "invalid gem version" if version && !Gem::Version.correct?(version)
     end
 
     def require_gem(name, version, baseline)
@@ -92,6 +111,18 @@ module Bonebed
 
     def stringify_keys(hash)
       hash.to_h { |key, value| [key.to_s, value] }
+    end
+
+    def empty_observation(error = nil)
+      {
+        files: {read: {}, write: {}}, network: {}, exec: {},
+        stats: {openat_total: 0, notify_roundtrips: 0, wall_ms: 0},
+        errors: error ? ["#{error.class}: #{error.message}"] : []
+      }
+    end
+
+    def safe_component(value)
+      value.to_s.gsub(/[^0-9A-Za-z._-]/, "_")
     end
   end
 end

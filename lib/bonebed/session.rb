@@ -71,7 +71,9 @@ module Bonebed
       if @bootstrap_exec
         @bootstrap_exec = false
       else
-        @collector.record_exec(Decoder::Execve.call(request))
+        event = Decoder::Execve.call(request)
+        # ponytail: same-mount check filters failed PATH lookups; retain attempts if targets gain separate mounts.
+        @collector.record_exec(event) if File.executable?(event[:path])
       end
     rescue StandardError => error
       @collector.record_error(:execve, error)
