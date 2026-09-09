@@ -14,16 +14,11 @@ Docker users must run with `--security-opt seccomp=unconfined`. Bonebed does not
 
 ## Installation
 
-Add Bonebed to a bundle:
+Bonebed is not published yet. Build and install the current checkout with:
 
 ```bash
-bundle add bonebed
-```
-
-Or install it directly:
-
-```bash
-gem install bonebed
+gem build bonebed.gemspec
+gem install ./bonebed-0.1.0.gem
 ```
 
 ## Diagnose the environment
