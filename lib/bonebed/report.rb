@@ -5,11 +5,9 @@ require "json"
 module Bonebed
   class Report
     def initialize(directory)
-      @manifests = Dir[File.join(directory, "*.json")].filter_map do |path|
-        JSON.parse(File.read(path))
-      rescue JSON::ParserError
-        nil
-      end
+      raise ArgumentError, "results directory does not exist: #{directory}" unless Dir.exist?(directory)
+
+      @manifests = Dir[File.join(directory, "*.json")].map { |path| JSON.parse(File.read(path)) }
     end
 
     def markdown

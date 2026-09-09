@@ -33,7 +33,7 @@ module Bonebed
     def self.top(limit)
       raise ArgumentError, "top must be between 1 and 100" unless (1..100).cover?(limit)
 
-      names = (1..(limit / 10.0).ceil).flat_map { |page| names_from(Net::HTTP.get(URI("#{STATS_URL}?page=#{page}"))) }.uniq
+      names = (1..(limit / 10.0).ceil).flat_map { |page| names_from(fetch_page(page)) }.uniq
       raise Error, "RubyGems stats returned only #{names.size} gem names" if names.size < limit
 
       names.first(limit).map { |name| {name:, version: nil} }
@@ -57,6 +57,17 @@ module Bonebed
       html.scan(%r{href="/gems/([^"?]+)}).flatten.map { |name| URI::DEFAULT_PARSER.unescape(name) }
     end
     private_class_method :names_from
+
+    def self.fetch_page(page)
+      uri = URI("#{STATS_URL}?page=#{page}")
+      Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 10, read_timeout: 10) do |http|
+        response = http.get(uri.request_uri)
+        raise Error, "RubyGems stats returned HTTP #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+
+        response.body
+      end
+    end
+    private_class_method :fetch_page
 
     private
 
