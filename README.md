@@ -67,6 +67,8 @@ bin/dev bundle exec rake
 bin/dev bundle exec exe/bonebed doctor
 ```
 
+The image includes `strace` for cross-checking noteworthy observations.
+
 ## Contributing
 
 Bug reports and pull requests are welcome on GitHub at https://github.com/ydah/bonebed.
