@@ -4,6 +4,8 @@
 
 Observe file, network, and process capabilities used while installing or requiring Ruby gems.
 
+[![Gem Version](https://img.shields.io/gem/v/bonebed.svg?colorB=319e8c)](https://rubygems.org/gems/bonebed)
+[![Downloads](https://img.shields.io/gem/dt/bonebed.svg)](https://rubygems.org/gems/bonebed)
 ![Ruby 3.2+](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
 ![Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.txt)
@@ -30,11 +32,10 @@ Bonebed uses Linux seccomp user notifications to observe the files, network addr
 
 ## Installation
 
-Bonebed is not published to RubyGems yet. Build and install the current checkout:
+Install Bonebed from RubyGems:
 
 ```bash
-gem build bonebed.gemspec
-gem install ./bonebed-0.1.0.gem
+gem install bonebed
 ```
 
 ### Requirements
