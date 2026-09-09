@@ -32,8 +32,9 @@ module Bonebed
 
     def id
       bundle = ENV["BUNDLE_GEMFILE"] ? "bundler" : "nobundler"
-      gems = Gem.loaded_specs.values.map { |specification| "#{specification.name}-#{specification.version}" }.sort.join("\0")
-      digest = Digest::SHA256.hexdigest(gems)[0, 8]
+        gems = Gem.loaded_specs.values.map { |specification| "#{specification.name}-#{specification.version}" }.sort
+        local_files = %w[Gemfile.lock bonebed.gemspec].filter_map { |path| File.read(path) if File.file?(path) }
+        digest = Digest::SHA256.hexdigest([*gems, *local_files].join("\0"))[0, 8]
       "ruby-#{RUBY_VERSION}-#{bundle}-#{RbConfig::CONFIG.fetch("host_cpu")}-#{digest}"
     end
 
