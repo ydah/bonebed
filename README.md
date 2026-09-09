@@ -1,78 +1,100 @@
+<div align="center">
+
 # Bonebed
 
-Bonebed observes the files, network addresses, and external commands touched while a Ruby gem is installed or required. It produces a capability manifest from Linux seccomp user notifications.
+Observe file, network, and process capabilities used while installing or requiring Ruby gems.
 
-Bonebed is an observation tool, not a security boundary. Pointer arguments can change between inspection and syscall continuation (TOCTOU), so its output describes what was observed rather than guaranteeing what happened.
+![Ruby 3.2+](https://img.shields.io/badge/Ruby-3.2%2B-CC342D?logo=ruby&logoColor=white)
+![Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.txt)
 
-## Requirements
+[Features](#features) · [Installation](#installation) · [Quick Start](#quick-start) · [Commands](#commands) · [How It Works](#how-it-works)
 
-- Linux 5.5 or newer on x86_64 or aarch64
-- Ruby 3.2 or newer
-- Permission to install a seccomp user-notification filter
+</div>
 
-Docker users must run with `--security-opt seccomp=unconfined`. Bonebed does not support macOS directly; use the development container below.
+---
+
+Bonebed uses Linux seccomp user notifications to observe the files, network addresses, and external commands touched by a Ruby gem. It subtracts normal Ruby and Bundler startup activity, then writes the remaining observations to a JSON capability manifest.
+
+> [!WARNING]
+> Bonebed is an observation tool, not a security boundary. Pointer arguments can change between inspection and syscall continuation (TOCTOU), so the manifest describes what was observed rather than guaranteeing what happened.
+
+## Features
+
+- Profile both `gem install` and `require`
+- Observe `open`/`openat`, `connect`, and `execve` calls
+- Subtract cached Ruby and Bundler startup baselines
+- Normalize home, gem, and temporary paths for comparable manifests
+- Survey RubyGems rankings, gem lists, or Bundler lockfiles with resumable results
+- Summarize multiple manifests as Markdown
 
 ## Installation
 
-Bonebed is not published yet. Build and install the current checkout with:
+Bonebed is not published to RubyGems yet. Build and install the current checkout:
 
 ```bash
 gem build bonebed.gemspec
 gem install ./bonebed-0.1.0.gem
 ```
 
-## Diagnose the environment
+### Requirements
 
-```bash
-bonebed doctor
-```
+- Linux 5.5 or newer on x86_64 or aarch64
+- Ruby 3.2 or newer
+- Permission to install a seccomp user-notification filter
 
-## Observe a gem
+Docker must run with `--security-opt seccomp=unconfined`. Bonebed does not run directly on macOS; use the included development container instead.
 
-Run Bonebed inside the development container so third-party code is not executed directly on the host:
+## Quick Start
 
-```bash
-bin/dev bundle exec exe/bonebed dig json
-bin/dev bundle exec exe/bonebed dig json --phase install
-```
-
-Manifests are written to `results/`. The first run records a Ruby/Bundler baseline in `.bonebed/baselines`; refresh it after environment changes with:
-
-```bash
-bin/dev bundle exec exe/bonebed baseline --refresh
-```
-
-Use `--offline` to return `ENETUNREACH` for every observed connection. This is a compatibility check, not a security sandbox.
-
-## Survey and report
-
-Survey RubyGems.org's all-time download ranking, a newline-separated gem list, or a lockfile. Existing result files are skipped so interrupted surveys can resume.
-
-```bash
-bin/dev bundle exec exe/bonebed survey --top 100
-bin/dev bundle exec exe/bonebed survey --gemfile Gemfile.lock --phase require
-bin/dev bundle exec exe/bonebed report results --format md
-```
-
-Top surveys default to the install phase because those gems need not already be installed. A list file accepts `NAME` or `NAME VERSION` on each line.
-
-## Development
-
-Build the Linux development image once, install dependencies, and run the checks inside it:
+Run Bonebed in its Linux development container so the gem under observation is not executed directly on the host:
 
 ```bash
 docker build -f Dockerfile.dev -t bonebed-dev .
 bin/dev bundle install
+bin/dev bundle exec exe/bonebed doctor
+bin/dev bundle exec exe/bonebed dig json
+```
+
+The manifest is written to `results/`. The first observation also caches a matching startup baseline in `.bonebed/baselines/`.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `bonebed doctor` | Check kernel, architecture, seccomp, and container support |
+| `bonebed baseline [--refresh]` | Create or refresh the startup baseline |
+| `bonebed dig GEM` | Observe a gem while it is required |
+| `bonebed dig GEM --phase install` | Install and observe a gem in disposable home and gem directories |
+| `bonebed survey --top N` | Observe up to 100 gems from RubyGems.org's all-time ranking |
+| `bonebed survey --file FILE` | Observe gems listed as `NAME` or `NAME VERSION` |
+| `bonebed survey --gemfile Gemfile.lock` | Observe gems from a Bundler lockfile |
+| `bonebed report results --format md` | Summarize collected manifests as Markdown |
+
+Use `--offline` with `dig` or `survey` to return `ENETUNREACH` for observed connections. This is a compatibility check, not a security sandbox. Existing survey results are skipped, so interrupted surveys can resume.
+
+## How It Works
+
+1. A seccomp filter sends `open`/`openat`, `connect`, and `execve` notifications to Bonebed.
+2. Bonebed decodes and records each call, then allows it to continue unless offline mode rejects a connection.
+3. A matching empty-Ruby observation is subtracted as startup noise.
+4. The remaining file paths, network endpoints, commands, counts, timing, and errors are written as JSON.
+
+Implementation notes and measured notification overhead are recorded in [NOTES.md](NOTES.md).
+
+## Development
+
+```bash
 bin/dev bundle exec rake
 bin/dev bundle exec exe/bonebed doctor
 ```
 
-The image includes `strace` for cross-checking noteworthy observations.
+The development image includes `strace` for cross-checking noteworthy observations.
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/ydah/bonebed.
+Bug reports and pull requests are welcome at [github.com/ydah/bonebed](https://github.com/ydah/bonebed).
 
 ## License
 
-The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
+Bonebed is available as open source under the terms of the [MIT License](LICENSE.txt).
