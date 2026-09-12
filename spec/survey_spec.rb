@@ -3,6 +3,15 @@
 require "tempfile"
 
 RSpec.describe Bonebed::Survey do
+  it "continues after target errors and reports failure" do
+    dig = instance_double(Bonebed::Dig, result_exists?: false, run: nil)
+    allow(dig).to receive(:last_errors).and_return([], ["failed"])
+    entries = [{name: "rake", version: nil}, {name: "json", version: nil}]
+
+    expect(described_class.new(dig:, output: StringIO.new).run(entries, phase: "require")).to be(false)
+    expect(dig).to have_received(:run).twice
+  end
+
   it "extracts unique gem names from the official stats pages" do
     html = '<a href="/gems/rake">rake</a><a href="/gems/json?locale=en">json</a><a href="/gems/rake">rake</a>'
 

@@ -56,8 +56,7 @@ module Bonebed
         raise ArgumentError, "GEM cannot be combined with --gemfile" if name
         raise ArgumentError, "--require cannot be combined with --gemfile" if options[:require_path]
 
-        Survey.new(dig:).run(Survey.lockfile(options[:gemfile]), phase: options[:phase])
-        0
+        Survey.new(dig:).run(Survey.lockfile(options[:gemfile]), phase: options[:phase]) ? 0 : 1
       else
         puts dig.run(name, phase: options[:phase], version: options[:version], require_path: options[:require_path])
         dig.last_errors.empty? ? 0 : 1
@@ -81,8 +80,7 @@ module Bonebed
 
       entries = options[:top] ? Survey.top(options[:top]) : options[:file] ? Survey.file(options[:file]) : Survey.lockfile(options[:gemfile])
       dig = Dig.new(**options.slice(:results_dir, :timeout, :offline))
-      Survey.new(dig:).run(entries, phase: options[:phase])
-      0
+      Survey.new(dig:).run(entries, phase: options[:phase]) ? 0 : 1
     end
 
     def self.report(arguments)

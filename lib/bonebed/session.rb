@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "timeout"
+require "tempfile"
 require_relative "collector"
 require_relative "decoder/openat"
 require_relative "decoder/connect"
@@ -19,29 +20,40 @@ module Bonebed
 
     def run
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      supervisor = build_supervisor
+      stderr = Tempfile.new("bonebed-stderr")
+      supervisor = build_supervisor(stderr)
       status = Timeout.timeout(@timeout) { supervisor.run }
-      @collector.finish(started_at, status)
+      @collector.finish(started_at, status, stderr: read(stderr))
       @collector
     rescue Timeout::Error
       terminate(supervisor&.target_pid)
       @collector.record_error("session", Timeout::Error.new("timed out after #{@timeout} seconds"))
-      @collector.finish(started_at, nil)
+      @collector.finish(started_at, nil, stderr: read(stderr))
       @collector
+    ensure
+      stderr&.close!
     end
 
     private
 
-    def build_supervisor
+    def build_supervisor(stderr)
       require "seccomp/notify"
       open_syscalls = RUBY_PLATFORM.include?("x86_64") ? %i[open openat] : %i[openat]
       policy = Seccomp::Notify::Policy.new { notify(*open_syscalls, :connect, :execve) }
-      supervisor = Seccomp::Notify.spawn(policy) { exec(@env, *@command) }
+      supervisor = Seccomp::Notify.spawn(policy) do
+        STDERR.reopen(stderr)
+        exec(@env, *@command)
+      end
       open_syscalls.each { |syscall| supervisor.on(syscall) { |request| handle_open(request, syscall) } }
       supervisor.on(:connect) { |request| handle_connect(request) }
       supervisor.on(:execve) { |request| handle_execve(request) }
       supervisor.on_error { |error, request| @collector.record_error(request&.syscall || "supervisor", error) }
       supervisor
+    end
+
+    def read(file)
+      file.rewind
+      file.read
     end
 
     def handle_open(request, syscall)

@@ -31,7 +31,7 @@ module Bonebed
       manifest = if phase == "install"
         Bundler.with_unbundled_env { install(name, version, @baseline.capture) }
       else
-        require_gem(name, version, require_path || name, @baseline.capture)
+        require_gem(name, version, require_path, @baseline.capture)
       end
       @last_errors = manifest.fetch("errors")
       FileUtils.mkdir_p(@results_dir)
@@ -52,7 +52,9 @@ module Bonebed
     def result_exists?(name, phase:, version: nil)
       validate!(name, phase, version)
       suffix = version ? safe_component(version) : "*"
-      !Dir[File.join(@results_dir, "#{name}-#{suffix}-#{phase}.json")].empty?
+      Dir[File.join(@results_dir, "#{name}-#{suffix}-#{phase}.json")].any? do |path|
+        JSON.parse(File.read(path)).fetch("errors", []).empty?
+      end
     end
 
     private
@@ -67,11 +69,30 @@ module Bonebed
 
     def require_gem(name, version, require_path, baseline)
       specification = Gem::Specification.find_by_name(name, version ? "=#{version}" : Gem::Requirement.default)
+      require_path ||= inferred_require_path(specification)
       code = 'gem ARGV[0], "=#{ARGV[1]}"; require ARGV[2]'
       collector = Session.new([RbConfig.ruby, "-e", code, name, specification.version.to_s, require_path], timeout: @timeout, offline: @offline).run
       normalizer = PathNormalizer.new
       manifest(name, specification.version.to_s, "require", collector.snapshot(normalizer), baseline,
         platform: specification.platform.to_s, require_path:)
+    end
+
+    def inferred_require_path(specification)
+      paths = [specification.name, specification.name.tr("-", "/")]
+      paths.find do |path|
+        specification.contains_requirable_file?(path)
+      end || matching_top_level_file(specification) || specification.name
+    end
+
+    def matching_top_level_file(specification)
+      normalized_name = specification.name.delete("-_")
+      specification.full_require_paths.each do |root|
+        Dir[File.join(root, "*.rb")].each do |file|
+          path = File.basename(file, ".rb")
+          return path if path.delete("-_") == normalized_name
+        end
+      end
+      nil
     end
 
     def install(name, version, baseline)
@@ -105,6 +126,7 @@ module Bonebed
       observation = Difference.call(observation, baseline.observation)
       files = observation.fetch(:files).transform_values { |entries| entries.keys.sort }
       files[:notable] = (files[:read].grep(/\A\$HOME\//) + files[:write].grep(/\A(?:\$HOME|\$TMPDIR)\//)).uniq.sort
+        .reject { |path| path.start_with?("$HOME/.cache/gem/") }
       gem = {"name" => name, "version" => version}
       gem["platform"] = platform if platform
       gem["require_path"] = require_path if require_path
@@ -117,7 +139,8 @@ module Bonebed
         "network" => counted_entries(observation.fetch(:network)),
         "exec" => counted_entries(observation.fetch(:exec)),
         "stats" => stringify_keys(observation.fetch(:stats)),
-        "errors" => observation.fetch(:errors)
+        "errors" => observation.fetch(:errors),
+        "stderr" => observation.fetch(:stderr, "")
       }
       data["installed_gems"] = installed_gems if installed_gems
       data
@@ -135,7 +158,7 @@ module Bonebed
       {
         files: {read: {}, write: {}}, network: {}, exec: {},
         stats: {openat_total: 0, notify_roundtrips: 0, wall_ms: 0},
-        errors: error ? ["#{error.class}: #{error.message}"] : []
+        errors: error ? ["#{error.class}: #{error.message}"] : [], stderr: ""
       }
     end
 

@@ -15,6 +15,7 @@ module Bonebed
     end
 
     def run(entries, phase:)
+      successful = true
       entries.each_with_index do |entry, index|
         name, version = entry.values_at(:name, :version)
         if @dig.result_exists?(name, phase:, version:)
@@ -24,10 +25,13 @@ module Bonebed
 
         @output.puts "[#{index + 1}/#{entries.size}] #{phase} #{name}"
         @dig.run(name, phase:, version:)
+        successful = false unless @dig.last_errors.empty?
       rescue StandardError => error
+        successful = false
         @output.puts "  failed: #{error.message}"
         write_failure(name, version, phase, error)
       end
+      successful
     end
 
     def self.top(limit)

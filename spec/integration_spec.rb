@@ -31,8 +31,11 @@ RSpec.describe "fixture manifests" do
     skip "Linux seccomp is required" unless RUBY_PLATFORM.include?("linux")
 
     Dir.mktmpdir("bonebed-require-path-") do |results|
-      expect(Bonebed::CLI.start(["dig", "seccomp-notify", "--results", results])).to eq(1)
-      expect(Bonebed::CLI.start(["dig", "seccomp-notify", "--require", "seccomp/notify", "--results", results])).to eq(0)
+      expect(Bonebed::CLI.start(["dig", "seccomp-notify", "--require", "missing", "--results", results])).to eq(1)
+      failed = JSON.parse(File.read(Dir[File.join(results, "*.json")].first))
+      expect(failed.fetch("stderr")).to include("cannot load such file -- missing")
+
+      expect(Bonebed::CLI.start(["dig", "seccomp-notify", "--results", results])).to eq(0)
 
       manifest = JSON.parse(File.read(Dir[File.join(results, "*.json")].first))
       expect(manifest.dig("gem", "require_path")).to eq("seccomp/notify")

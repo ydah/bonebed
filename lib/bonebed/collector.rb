@@ -32,9 +32,10 @@ module Bonebed
       @errors << "#{context}: #{error.class}: #{error.message}"
     end
 
-    def finish(started_at, status)
+    def finish(started_at, status, stderr: "")
       @wall_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
       @status = status
+      @stderr = stderr
       return if status&.success?
 
       @errors << if status&.signaled?
@@ -50,7 +51,8 @@ module Bonebed
         network: normalize_network(normalizer),
         exec: normalize_exec(normalizer),
         stats: {openat_total: @files.values.sum { |entries| entries.values.sum }, notify_roundtrips: @roundtrips, wall_ms: @wall_ms},
-        errors: @errors.dup
+        errors: @errors.dup,
+        stderr: @stderr.to_s
       }
     end
 
