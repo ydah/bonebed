@@ -43,6 +43,18 @@ RSpec.describe "fixture manifests" do
     end
   end
 
+  it "captures target stdout and stderr" do
+    skip "Linux seccomp is required" unless RUBY_PLATFORM.include?("linux")
+
+    collector = nil
+    expect do
+      collector = Bonebed::Session.new([RbConfig.ruby, "-e", 'puts "captured stdout"; warn "captured stderr"']).run
+    end.to output("captured stdout\n").to_stdout.and output("captured stderr\n").to_stderr
+    observation = collector.snapshot(Bonebed::PathNormalizer.new)
+
+    expect(observation.values_at(:stdout, :stderr)).to eq(["captured stdout\n", "captured stderr\n"])
+  end
+
   def command(fixture)
     root = File.join(__dir__, "fixtures", "gems", fixture)
     return [RbConfig.ruby, File.join(root, "ext", "bonebed_fixture", "extconf.rb")] if fixture == "extconf"

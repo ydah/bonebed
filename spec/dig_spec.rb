@@ -21,16 +21,29 @@ RSpec.describe Bonebed::Dig do
     end
   end
 
-  it "excludes the RubyGems cache from notable files" do
+  it "infers the only top-level file under the gemspec require path" do
+    Dir.mktmpdir do |root|
+      File.write(File.join(root, "yajl.rb"), "")
+      specification = instance_double(Gem::Specification, name: "yajl-ruby", full_require_paths: [root])
+      allow(specification).to receive(:contains_requirable_file?).and_return(false)
+
+      expect(described_class.new.send(:inferred_require_path, specification)).to eq("yajl")
+    end
+  end
+
+  it "keeps project access notable and excludes the RubyGems cache" do
     observation = {
-      files: {read: {}, write: {"$HOME/.cache/gem/spec.gemspec" => 1, "$HOME/.config/demo" => 1}},
-      network: {}, exec: {}, stats: {openat_total: 2, notify_roundtrips: 2, wall_ms: 1}, errors: [], stderr: ""
+      files: {
+        read: {"$PWD/config/demo.yml" => 1},
+        write: {"$HOME/.cache/gem/spec.gemspec" => 1, "$HOME/.config/demo" => 1, "$PWD/log/demo.log" => 1}
+      },
+      network: {}, exec: {}, stats: {openat_total: 4, notify_roundtrips: 4, wall_ms: 1}, errors: [], stderr: ""
     }
     baseline = Bonebed::Baseline::Result.new(id: "test", observation: {files: {read: {}, write: {}}, network: {}, exec: {}})
 
     manifest = described_class.new.send(:manifest, "demo", "1.0.0", "install", observation, baseline)
 
-    expect(manifest.dig("files", "notable")).to eq(["$HOME/.config/demo"])
+    expect(manifest.dig("files", "notable")).to eq(["$HOME/.config/demo", "$PWD/config/demo.yml", "$PWD/log/demo.log"])
     expect(manifest.dig("files", "write")).to include("$HOME/.cache/gem/spec.gemspec")
   end
 
@@ -43,6 +56,10 @@ RSpec.describe Bonebed::Dig do
 
       File.write(path, JSON.generate(errors: []))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0")).to be(true)
+
+      File.write(path, JSON.generate(errors: [], gem: {require_path: "demo/base"}))
+      expect(dig.result_exists?("demo", phase: "require", version: "1.0.0", require_path: "demo/base")).to be(true)
+      expect(dig.result_exists?("demo", phase: "require", version: "1.0.0", require_path: "demo/full")).to be(false)
     end
   end
 

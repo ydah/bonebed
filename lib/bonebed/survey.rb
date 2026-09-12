@@ -17,14 +17,15 @@ module Bonebed
     def run(entries, phase:)
       successful = true
       entries.each_with_index do |entry, index|
-        name, version = entry.values_at(:name, :version)
-        if @dig.result_exists?(name, phase:, version:)
+        name, version, require_path = entry.values_at(:name, :version, :require_path)
+        require_path = nil if phase == "install"
+        if @dig.result_exists?(name, phase:, version:, require_path:)
           @output.puts "[#{index + 1}/#{entries.size}] skip #{name}"
           next
         end
 
         @output.puts "[#{index + 1}/#{entries.size}] #{phase} #{name}"
-        @dig.run(name, phase:, version:)
+        @dig.run(name, phase:, version:, require_path:)
         successful = false unless @dig.last_errors.empty?
       rescue StandardError => error
         successful = false
@@ -45,8 +46,12 @@ module Bonebed
 
     def self.file(path)
       File.readlines(path, chomp: true).filter_map do |line|
-        name, version = line.sub(/#.*/, "").split
-        {name:, version:} if name
+        name, version, require_path = line.sub(/#.*/, "").split
+        next unless name
+
+        entry = {name:, version: version == "-" ? nil : version}
+        entry[:require_path] = require_path if require_path
+        entry
       end
     end
 

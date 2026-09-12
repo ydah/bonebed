@@ -14,6 +14,7 @@ module Bonebed
         exec: subtract(observed.fetch(:exec), baseline.fetch(:exec, {})),
         stats: observed.fetch(:stats).merge(openat_after_baseline: files.values.sum { |entries| entries.values.sum }),
         errors: observed.fetch(:errors),
+        stdout: observed.fetch(:stdout, ""),
         stderr: observed.fetch(:stderr, "")
       }
     end

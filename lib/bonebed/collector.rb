@@ -32,11 +32,12 @@ module Bonebed
       @errors << "#{context}: #{error.class}: #{error.message}"
     end
 
-    def finish(started_at, status, stderr: "")
+    def finish(started_at, status, stdout: "", stderr: "")
       @wall_ms = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
       @status = status
-      @stderr = stderr
-      return if status&.success?
+      @stdout = utf8(stdout)
+      @stderr = utf8(stderr)
+      return if status.nil? || status.success?
 
       @errors << if status&.signaled?
         "target terminated by signal #{status.termsig}"
@@ -52,11 +53,17 @@ module Bonebed
         exec: normalize_exec(normalizer),
         stats: {openat_total: @files.values.sum { |entries| entries.values.sum }, notify_roundtrips: @roundtrips, wall_ms: @wall_ms},
         errors: @errors.dup,
+        stdout: @stdout.to_s,
         stderr: @stderr.to_s
       }
     end
 
     private
+
+    # ponytail: manifests are text; add base64 fields only if byte-perfect output becomes a requirement.
+    def utf8(value)
+      value.to_s.b.force_encoding(Encoding::UTF_8).scrub
+    end
 
     def normalize_counts(entries, normalizer)
       entries.each_with_object(Hash.new(0)) { |(path, count), result| result[normalizer.call(path)] += count }

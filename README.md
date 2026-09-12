@@ -26,9 +26,9 @@ Bonebed uses Linux seccomp user notifications to observe the files, network addr
 - Profile both `gem install` and `require`
 - Observe `open`/`openat`, `connect`, and `execve` calls
 - Subtract cached Ruby and Bundler startup baselines
-- Normalize home, gem, and temporary paths for comparable manifests
+- Normalize project, home, gem, and temporary paths for comparable manifests
 - Survey RubyGems rankings, gem lists, or Bundler lockfiles with resumable results
-- Summarize failures and commands by gem as Markdown
+- Summarize failures, project file access, and commands by survey target as Markdown
 
 ## Installation
 
@@ -68,11 +68,13 @@ The manifest is written to `results/`. The first observation also caches a match
 | `bonebed dig GEM` | Observe a gem while it is required; common load paths are inferred, or use `--require PATH` |
 | `bonebed dig GEM --phase install` | Install and observe a gem in disposable home and gem directories |
 | `bonebed survey --top N` | Observe up to 100 gems from RubyGems.org's all-time ranking |
-| `bonebed survey --file FILE` | Observe gems listed as `NAME` or `NAME VERSION` |
+| `bonebed survey --file FILE` | Observe gems listed as `NAME [VERSION|-] [REQUIRE_PATH]` |
 | `bonebed survey --gemfile Gemfile.lock` | Observe gems from a Bundler lockfile |
 | `bonebed report results --format md` | Summarize collected manifests as Markdown |
 
 Use `--offline` with `dig` or `survey` to return `ENETUNREACH` for observed connections. This is a compatibility check, not a security sandbox. Existing successful survey results are skipped and failures are retried, so interrupted surveys can resume. A survey finishes every entry but exits with status 1 if any observation fails.
+
+Use `sinatra - sinatra/base` in a survey file to set a require path without pinning a version. Require paths are ignored during install surveys.
 
 `dig` still writes its manifest but exits with status 1 when the observed command fails.
 
@@ -81,7 +83,9 @@ Use `--offline` with `dig` or `survey` to return `ENETUNREACH` for observed conn
 1. A seccomp filter sends `open`/`openat`, `connect`, and `execve` notifications to Bonebed.
 2. Bonebed decodes and records each call, then allows it to continue unless offline mode rejects a connection.
 3. A matching empty-Ruby observation is subtracted as startup noise.
-4. The remaining file paths, network endpoints, commands, installed gems, counts, timing, errors, and stderr are written as JSON. Routine RubyGems cache writes stay in the file list but are excluded from `notable`.
+4. Target stdout and stderr are streamed while the remaining file paths, network endpoints, commands, installed gems, counts, timing, errors, and output are written as JSON. Project paths are normalized to `$PWD`; routine RubyGems cache writes stay in the file list but are excluded from `notable`.
+
+Captured output is stored as UTF-8; invalid byte sequences are replaced so binary output cannot prevent manifest creation. Failure reports keep compact output previews in the table and the complete output in a folded section.
 
 Implementation notes and measured notification overhead are recorded in [NOTES.md](NOTES.md).
 

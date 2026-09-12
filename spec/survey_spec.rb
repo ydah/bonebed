@@ -12,6 +12,14 @@ RSpec.describe Bonebed::Survey do
     expect(dig).to have_received(:run).twice
   end
 
+  it "passes an entry's require path to dig" do
+    dig = instance_double(Bonebed::Dig, result_exists?: false, run: nil, last_errors: [])
+    entry = {name: "sinatra", version: nil, require_path: "sinatra/base"}
+
+    expect(described_class.new(dig:, output: StringIO.new).run([entry], phase: "require")).to be(true)
+    expect(dig).to have_received(:run).with("sinatra", phase: "require", version: nil, require_path: "sinatra/base")
+  end
+
   it "extracts unique gem names from the official stats pages" do
     html = '<a href="/gems/rake">rake</a><a href="/gems/json?locale=en">json</a><a href="/gems/rake">rake</a>'
 
@@ -20,12 +28,13 @@ RSpec.describe Bonebed::Survey do
 
   it "parses names and optional versions from a text file" do
     file = Tempfile.new
-    file.write("rake 13.4.2\njson # latest\n\n")
+    file.write("rake 13.4.2\njson # latest\nsinatra - sinatra/base\n\n")
     file.close
 
     expect(described_class.file(file.path)).to eq([
       {name: "rake", version: "13.4.2"},
-      {name: "json", version: nil}
+      {name: "json", version: nil},
+      {name: "sinatra", version: nil, require_path: "sinatra/base"}
     ])
   ensure
     file&.unlink

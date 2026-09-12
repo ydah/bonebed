@@ -8,6 +8,7 @@ RSpec.describe Bonebed::Difference do
       exec: {{path: "/usr/bin/git", argv: ["git"]} => 1},
       stats: {openat_total: 3, notify_roundtrips: 6, wall_ms: 10},
       errors: [],
+      stdout: "command output",
       stderr: "failure details"
     }
     baseline = {
@@ -22,6 +23,7 @@ RSpec.describe Bonebed::Difference do
     expect(result[:network].values).to eq([1])
     expect(result[:exec].values).to eq([1])
     expect(result[:stats]).to include(openat_total: 3, openat_after_baseline: 1)
+    expect(result[:stdout]).to eq("command output")
     expect(result[:stderr]).to eq("failure details")
   end
 end

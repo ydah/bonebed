@@ -4,15 +4,17 @@ require "tmpdir"
 
 module Bonebed
   class PathNormalizer
-    def initialize(home: Dir.home, gem_paths: Gem.path, tmpdir: Dir.tmpdir)
+    def initialize(home: Dir.home, gem_paths: Gem.path, tmpdir: Dir.tmpdir, cwd: Dir.pwd)
       @home = clean(home)
       @gem_paths = gem_paths.map { |path| clean(path) }.sort_by { |path| -path.length }
       @tmpdir = clean(tmpdir)
+      @cwd = clean(cwd)
     end
 
     def call(path)
       gem_path = @gem_paths.find { |root| inside?(path, root) }
       return replace(path, gem_path, "$GEM_HOME") if gem_path
+      return replace(path, @cwd, "$PWD") if inside?(path, @cwd)
       return replace(path, @home, "$HOME") if inside?(path, @home)
       return path == @tmpdir ? "$TMPDIR" : "$TMPDIR/<random>" if inside?(path, @tmpdir)
 

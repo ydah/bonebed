@@ -49,11 +49,12 @@ module Bonebed
       path
     end
 
-    def result_exists?(name, phase:, version: nil)
-      validate!(name, phase, version)
+    def result_exists?(name, phase:, version: nil, require_path: nil)
+      validate!(name, phase, version, require_path:)
       suffix = version ? safe_component(version) : "*"
       Dir[File.join(@results_dir, "#{name}-#{suffix}-#{phase}.json")].any? do |path|
-        JSON.parse(File.read(path)).fetch("errors", []).empty?
+        manifest = JSON.parse(File.read(path))
+        manifest.fetch("errors", []).empty? && (!require_path || manifest.dig("gem", "require_path") == require_path)
       end
     end
 
@@ -86,13 +87,10 @@ module Bonebed
 
     def matching_top_level_file(specification)
       normalized_name = specification.name.delete("-_")
-      specification.full_require_paths.each do |root|
-        Dir[File.join(root, "*.rb")].each do |file|
-          path = File.basename(file, ".rb")
-          return path if path.delete("-_") == normalized_name
-        end
-      end
-      nil
+      paths = specification.full_require_paths.flat_map do |root|
+        Dir[File.join(root, "*.rb")].map { |file| File.basename(file, ".rb") }
+      end.uniq
+      paths.find { |path| path.delete("-_") == normalized_name } || (paths.first if paths.one?)
     end
 
     def install(name, version, baseline)
@@ -125,7 +123,7 @@ module Bonebed
     def manifest(name, version, phase, observation, baseline, platform: nil, require_path: nil, installed_gems: nil)
       observation = Difference.call(observation, baseline.observation)
       files = observation.fetch(:files).transform_values { |entries| entries.keys.sort }
-      files[:notable] = (files[:read].grep(/\A\$HOME\//) + files[:write].grep(/\A(?:\$HOME|\$TMPDIR)\//)).uniq.sort
+      files[:notable] = (files[:read].grep(/\A(?:\$HOME|\$PWD)\//) + files[:write].grep(/\A(?:\$HOME|\$PWD|\$TMPDIR)\//)).uniq.sort
         .reject { |path| path.start_with?("$HOME/.cache/gem/") }
       gem = {"name" => name, "version" => version}
       gem["platform"] = platform if platform
@@ -140,6 +138,7 @@ module Bonebed
         "exec" => counted_entries(observation.fetch(:exec)),
         "stats" => stringify_keys(observation.fetch(:stats)),
         "errors" => observation.fetch(:errors),
+        "stdout" => observation.fetch(:stdout, ""),
         "stderr" => observation.fetch(:stderr, "")
       }
       data["installed_gems"] = installed_gems if installed_gems
@@ -158,7 +157,7 @@ module Bonebed
       {
         files: {read: {}, write: {}}, network: {}, exec: {},
         stats: {openat_total: 0, notify_roundtrips: 0, wall_ms: 0},
-        errors: error ? ["#{error.class}: #{error.message}"] : [], stderr: ""
+        errors: error ? ["#{error.class}: #{error.message}"] : [], stdout: "", stderr: ""
       }
     end
 

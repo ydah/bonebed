@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "timeout"
-require "tempfile"
 require_relative "collector"
 require_relative "decoder/openat"
 require_relative "decoder/connect"
@@ -20,27 +19,33 @@ module Bonebed
 
     def run
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      stderr = Tempfile.new("bonebed-stderr")
-      supervisor = build_supervisor(stderr)
+      stdout_reader, stdout_writer = IO.pipe
+      stderr_reader, stderr_writer = IO.pipe
+      supervisor = build_supervisor(stdout_writer, stderr_writer)
+      stdout_writer.close
+      stderr_writer.close
+      stdout_thread = stream(stdout_reader, $stdout)
+      stderr_thread = stream(stderr_reader, $stderr)
       status = Timeout.timeout(@timeout) { supervisor.run }
-      @collector.finish(started_at, status, stderr: read(stderr))
+      @collector.finish(started_at, status, stdout: stdout_thread.value, stderr: stderr_thread.value)
       @collector
     rescue Timeout::Error
       terminate(supervisor&.target_pid)
       @collector.record_error("session", Timeout::Error.new("timed out after #{@timeout} seconds"))
-      @collector.finish(started_at, nil, stderr: read(stderr))
+      @collector.finish(started_at, nil, stdout: stdout_thread&.value.to_s, stderr: stderr_thread&.value.to_s)
       @collector
     ensure
-      stderr&.close!
+      [stdout_reader, stdout_writer, stderr_reader, stderr_writer].compact.each { |io| io.close unless io.closed? }
     end
 
     private
 
-    def build_supervisor(stderr)
+    def build_supervisor(stdout, stderr)
       require "seccomp/notify"
       open_syscalls = RUBY_PLATFORM.include?("x86_64") ? %i[open openat] : %i[openat]
       policy = Seccomp::Notify::Policy.new { notify(*open_syscalls, :connect, :execve) }
       supervisor = Seccomp::Notify.spawn(policy) do
+        STDOUT.reopen(stdout)
         STDERR.reopen(stderr)
         exec(@env, *@command)
       end
@@ -51,9 +56,26 @@ module Bonebed
       supervisor
     end
 
-    def read(file)
-      file.rewind
-      file.read
+    def stream(reader, destination)
+      Thread.new do
+        captured = +""
+        loop do
+          chunk = reader.readpartial(4096)
+          captured << chunk
+          mirror(destination, chunk)
+        end
+      rescue EOFError
+        captured
+      ensure
+        reader.close unless reader.closed?
+      end
+    end
+
+    def mirror(destination, chunk)
+      destination.write(chunk)
+      destination.flush
+    rescue IOError, SystemCallError
+      nil
     end
 
     def handle_open(request, syscall)
