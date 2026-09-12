@@ -13,7 +13,7 @@ require_relative "session"
 module Bonebed
   class Dig
     PHASES = %w[require install].freeze
-    attr_reader :results_dir
+    attr_reader :results_dir, :last_errors
 
     def initialize(results_dir: "results", timeout: 30, offline: false, baseline: Baseline.new(timeout:))
       raise ArgumentError, "timeout must be positive" unless timeout.positive?
@@ -22,15 +22,17 @@ module Bonebed
       @timeout = timeout
       @offline = offline
       @baseline = baseline
+      @last_errors = []
     end
 
-    def run(name, phase: "require", version: nil)
-      validate!(name, phase, version)
+    def run(name, phase: "require", version: nil, require_path: nil)
+      validate!(name, phase, version, require_path:)
       manifest = if phase == "install"
         Bundler.with_unbundled_env { install(name, version, @baseline.capture) }
       else
-        require_gem(name, version, @baseline.capture)
+        require_gem(name, version, require_path || name, @baseline.capture)
       end
+      @last_errors = manifest.fetch("errors")
       FileUtils.mkdir_p(@results_dir)
       path = File.join(@results_dir, "#{name}-#{safe_component(manifest.dig("gem", "version"))}-#{phase}.json")
       File.write(path, "#{JSON.pretty_generate(manifest)}\n")
@@ -54,18 +56,20 @@ module Bonebed
 
     private
 
-    def validate!(name, phase, version = nil)
+    def validate!(name, phase, version = nil, require_path: nil)
       raise ArgumentError, "gem name is required" unless name&.match?(/\A[a-zA-Z0-9_-]+\z/)
       raise ArgumentError, "phase must be require or install" unless PHASES.include?(phase)
       raise ArgumentError, "invalid gem version" if version && !Gem::Version.correct?(version)
+      raise ArgumentError, "require path must not be empty" if require_path == ""
+      raise ArgumentError, "require path only applies to require phase" if require_path && phase != "require"
     end
 
-    def require_gem(name, version, baseline)
+    def require_gem(name, version, require_path, baseline)
       specification = Gem::Specification.find_by_name(name, version ? "=#{version}" : Gem::Requirement.default)
-      code = 'gem ARGV[0], "=#{ARGV[1]}"; require ARGV[0]'
-      collector = Session.new([RbConfig.ruby, "-e", code, name, specification.version.to_s], timeout: @timeout, offline: @offline).run
+      code = 'gem ARGV[0], "=#{ARGV[1]}"; require ARGV[2]'
+      collector = Session.new([RbConfig.ruby, "-e", code, name, specification.version.to_s, require_path], timeout: @timeout, offline: @offline).run
       normalizer = PathNormalizer.new
-      manifest(name, specification.version.to_s, "require", collector.snapshot(normalizer), baseline)
+      manifest(name, specification.version.to_s, "require", collector.snapshot(normalizer), baseline, require_path:)
     end
 
     def install(name, version, baseline)
@@ -88,13 +92,15 @@ module Bonebed
       File.basename(path, ".gemspec").delete_prefix("#{name}-") if path
     end
 
-    def manifest(name, version, phase, observation, baseline)
+    def manifest(name, version, phase, observation, baseline, require_path: nil)
       observation = Difference.call(observation, baseline.observation)
       files = observation.fetch(:files).transform_values { |entries| entries.keys.sort }
       files[:notable] = (files[:read].grep(/\A\$HOME\//) + files[:write].grep(/\A(?:\$HOME|\$TMPDIR)\//)).uniq.sort
+      gem = {"name" => name, "version" => version}
+      gem["require_path"] = require_path if require_path
       {
         "schema_version" => 1,
-        "gem" => {"name" => name, "version" => version},
+        "gem" => gem,
         "phase" => phase,
         "environment" => {"ruby" => RUBY_VERSION, "arch" => RbConfig::CONFIG.fetch("host_cpu"), "kernel" => `uname -r`.strip, "baseline_id" => baseline.id},
         "files" => stringify_keys(files),

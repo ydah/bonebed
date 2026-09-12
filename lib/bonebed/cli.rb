@@ -22,7 +22,7 @@ module Bonebed
           Usage:
             bonebed doctor
             bonebed baseline [--refresh]
-            bonebed dig GEM [--phase require|install] [--version VERSION] [--offline]
+            bonebed dig GEM [--phase require|install] [--require PATH] [--version VERSION] [--offline]
             bonebed dig --gemfile Gemfile.lock [--phase require|install]
             bonebed survey (--top N | --file FILE | --gemfile FILE) [--phase require|install]
             bonebed report RESULTS_DIR [--format md]
@@ -38,9 +38,10 @@ module Bonebed
     end
 
     def self.dig(arguments)
-      options = {phase: "require", results_dir: "results", timeout: 30, offline: false, gemfile: nil}
+      options = {phase: "require", results_dir: "results", timeout: 30, offline: false, gemfile: nil, require_path: nil}
       OptionParser.new do |parser|
         parser.on("--phase PHASE") { |value| options[:phase] = value }
+        parser.on("--require PATH") { |value| options[:require_path] = value }
         parser.on("--version VERSION") { |value| options[:version] = value }
         parser.on("--results DIR") { |value| options[:results_dir] = value }
         parser.on("--timeout SECONDS", Integer) { |value| options[:timeout] = value }
@@ -53,12 +54,14 @@ module Bonebed
       dig = Dig.new(**options.slice(:results_dir, :timeout, :offline))
       if options[:gemfile]
         raise ArgumentError, "GEM cannot be combined with --gemfile" if name
+        raise ArgumentError, "--require cannot be combined with --gemfile" if options[:require_path]
 
         Survey.new(dig:).run(Survey.lockfile(options[:gemfile]), phase: options[:phase])
+        0
       else
-        puts dig.run(name, phase: options[:phase], version: options[:version])
+        puts dig.run(name, phase: options[:phase], version: options[:version], require_path: options[:require_path])
+        dig.last_errors.empty? ? 0 : 1
       end
-      0
     end
 
     def self.survey(arguments)

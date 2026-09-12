@@ -4,6 +4,7 @@ require "fileutils"
 require "json"
 require "rbconfig"
 require "tmpdir"
+require "bonebed/cli"
 
 RSpec.describe "fixture manifests" do
   it "matches all six known syscall profiles" do
@@ -23,6 +24,19 @@ RSpec.describe "fixture manifests" do
         expected = JSON.parse(File.read(File.join(__dir__, "fixtures", "golden", "#{fixture}.json")))
         expect(actual).to eq(expected), "#{fixture} manifest differed"
       end
+    end
+  end
+
+  it "accepts a distinct require path and reports target failures" do
+    skip "Linux seccomp is required" unless RUBY_PLATFORM.include?("linux")
+
+    Dir.mktmpdir("bonebed-require-path-") do |results|
+      expect(Bonebed::CLI.start(["dig", "seccomp-notify", "--results", results])).to eq(1)
+      expect(Bonebed::CLI.start(["dig", "seccomp-notify", "--require", "seccomp/notify", "--results", results])).to eq(0)
+
+      manifest = JSON.parse(File.read(Dir[File.join(results, "*.json")].first))
+      expect(manifest.dig("gem", "require_path")).to eq("seccomp/notify")
+      expect(manifest.fetch("errors")).to be_empty
     end
   end
 

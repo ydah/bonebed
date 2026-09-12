@@ -65,7 +65,7 @@ The manifest is written to `results/`. The first observation also caches a match
 | --- | --- |
 | `bonebed doctor` | Check kernel, architecture, seccomp, and container support |
 | `bonebed baseline [--refresh]` | Create or refresh the startup baseline |
-| `bonebed dig GEM` | Observe a gem while it is required |
+| `bonebed dig GEM` | Observe a gem while it is required; use `--require PATH` when its load path differs from its name |
 | `bonebed dig GEM --phase install` | Install and observe a gem in disposable home and gem directories |
 | `bonebed survey --top N` | Observe up to 100 gems from RubyGems.org's all-time ranking |
 | `bonebed survey --file FILE` | Observe gems listed as `NAME` or `NAME VERSION` |
@@ -73,6 +73,8 @@ The manifest is written to `results/`. The first observation also caches a match
 | `bonebed report results --format md` | Summarize collected manifests as Markdown |
 
 Use `--offline` with `dig` or `survey` to return `ENETUNREACH` for observed connections. This is a compatibility check, not a security sandbox. Existing survey results are skipped, so interrupted surveys can resume.
+
+`dig` still writes its manifest but exits with status 1 when the observed command fails.
 
 ## How It Works
 
