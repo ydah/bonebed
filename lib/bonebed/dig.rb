@@ -3,6 +3,7 @@
 require "fileutils"
 require "json"
 require "rbconfig"
+require "rubygems/stub_specification"
 require "tmpdir"
 require "bundler"
 require_relative "baseline"
@@ -69,7 +70,8 @@ module Bonebed
       code = 'gem ARGV[0], "=#{ARGV[1]}"; require ARGV[2]'
       collector = Session.new([RbConfig.ruby, "-e", code, name, specification.version.to_s, require_path], timeout: @timeout, offline: @offline).run
       normalizer = PathNormalizer.new
-      manifest(name, specification.version.to_s, "require", collector.snapshot(normalizer), baseline, require_path:)
+      manifest(name, specification.version.to_s, "require", collector.snapshot(normalizer), baseline,
+        platform: specification.platform.to_s, require_path:)
     end
 
     def install(name, version, baseline)
@@ -81,24 +83,32 @@ module Bonebed
         command = [RbConfig.ruby, "-S", "gem", "install", requested, "--no-document", "--install-dir", gem_home]
         env = {"GEM_HOME" => gem_home, "GEM_PATH" => gem_home, "HOME" => home}
         collector = Session.new(command, env:, timeout: @timeout, offline: @offline).run
-        installed_version = installed_version(gem_home, name) || version || "unknown"
+        gems = installed_gems(gem_home)
+        installed = gems.find { |gem| gem.fetch("name") == name }
         normalizer = PathNormalizer.new(home:, gem_paths: [gem_home, *Gem.path], tmpdir: root)
-        manifest(name, installed_version, "install", collector.snapshot(normalizer), baseline)
+        manifest(name, installed&.fetch("version") || version || "unknown", "install", collector.snapshot(normalizer), baseline,
+          platform: installed&.fetch("platform"), installed_gems: gems)
       end
     end
 
-    def installed_version(gem_home, name)
-      path = Dir[File.join(gem_home, "specifications", "#{name}-*.gemspec")].max
-      File.basename(path, ".gemspec").delete_prefix("#{name}-") if path
+    def installed_gems(gem_home)
+      specifications = File.join(gem_home, "specifications")
+      Dir[File.join(specifications, "*.gemspec")].filter_map do |path|
+        specification = Gem::StubSpecification.gemspec_stub(path, gem_home, File.join(gem_home, "gems"))
+        next unless specification.valid?
+
+        {"name" => specification.name, "version" => specification.version.to_s, "platform" => specification.platform.to_s}
+      end.sort_by { |gem| gem.values_at("name", "version", "platform") }
     end
 
-    def manifest(name, version, phase, observation, baseline, require_path: nil)
+    def manifest(name, version, phase, observation, baseline, platform: nil, require_path: nil, installed_gems: nil)
       observation = Difference.call(observation, baseline.observation)
       files = observation.fetch(:files).transform_values { |entries| entries.keys.sort }
       files[:notable] = (files[:read].grep(/\A\$HOME\//) + files[:write].grep(/\A(?:\$HOME|\$TMPDIR)\//)).uniq.sort
       gem = {"name" => name, "version" => version}
+      gem["platform"] = platform if platform
       gem["require_path"] = require_path if require_path
-      {
+      data = {
         "schema_version" => 1,
         "gem" => gem,
         "phase" => phase,
@@ -109,6 +119,8 @@ module Bonebed
         "stats" => stringify_keys(observation.fetch(:stats)),
         "errors" => observation.fetch(:errors)
       }
+      data["installed_gems"] = installed_gems if installed_gems
+      data
     end
 
     def counted_entries(entries)

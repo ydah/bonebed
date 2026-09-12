@@ -81,7 +81,7 @@ Use `--offline` with `dig` or `survey` to return `ENETUNREACH` for observed conn
 1. A seccomp filter sends `open`/`openat`, `connect`, and `execve` notifications to Bonebed.
 2. Bonebed decodes and records each call, then allows it to continue unless offline mode rejects a connection.
 3. A matching empty-Ruby observation is subtracted as startup noise.
-4. The remaining file paths, network endpoints, commands, counts, timing, and errors are written as JSON.
+4. The remaining file paths, network endpoints, commands, installed gems, counts, timing, and errors are written as JSON.
 
 Implementation notes and measured notification overhead are recorded in [NOTES.md](NOTES.md).
 
