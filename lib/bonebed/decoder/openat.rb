@@ -3,15 +3,39 @@
 module Bonebed
   module Decoder
     module Openat
+      AT_FDCWD = -100
       module_function
 
       def call(request, syscall: request.syscall)
         path_argument, flags_argument = syscall == :open ? [0, 1] : [1, 2]
+        path = request.read_string(request.args.fetch(path_argument))
         {
-          path: request.read_string(request.args.fetch(path_argument)),
-          mode: (request.args.fetch(flags_argument) & (File::WRONLY | File::RDWR)).zero? ? :read : :write
+          path: resolve(path, request, syscall),
+          mode: write?(request.args.fetch(flags_argument)) ? :write : :read
         }
       end
+
+      def resolve(path, request, syscall)
+        return path if path.start_with?(File::SEPARATOR)
+
+        dirfd = signed(request.args.fetch(0)) unless syscall == :open
+        link = dirfd.nil? || dirfd == AT_FDCWD ? "cwd" : "fd/#{dirfd}"
+        File.expand_path(path, File.readlink("/proc/#{request.pid}/#{link}"))
+      rescue SystemCallError
+        path
+      end
+      private_class_method :resolve
+
+      def signed(value)
+        value >= (1 << 63) ? value - (1 << 64) : value
+      end
+      private_class_method :signed
+
+      def write?(flags)
+        write_flags = File::WRONLY | File::RDWR | File::CREAT | File::TRUNC | File::APPEND
+        !(flags & write_flags).zero?
+      end
+      private_class_method :write?
     end
   end
 end

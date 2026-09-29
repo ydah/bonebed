@@ -16,7 +16,7 @@ Observe file, network, and process capabilities used while installing or requiri
 
 ---
 
-Bonebed uses Linux seccomp user notifications to observe the files, network addresses, and external commands touched by a Ruby gem. It subtracts normal Ruby and Bundler startup activity, then writes the remaining observations to a JSON capability manifest.
+Bonebed uses Linux seccomp user notifications to observe the files, network addresses, external commands, and thread creation syscalls touched by a Ruby gem. It subtracts normal Ruby and Bundler startup activity, then writes the remaining observations to a JSON capability manifest.
 
 > [!WARNING]
 > Bonebed is an observation tool, not a security boundary. Pointer arguments can change between inspection and syscall continuation (TOCTOU), so the manifest describes what was observed rather than guaranteeing what happened.
@@ -24,7 +24,7 @@ Bonebed uses Linux seccomp user notifications to observe the files, network addr
 ## Features
 
 - Profile both `gem install` and `require`
-- Observe `open`/`openat`, `connect`, and `execve` calls
+- Observe `open`/`openat`, `connect`, `execve`, `clone`, and `clone3` calls
 - Subtract cached Ruby and Bundler startup baselines
 - Normalize project, home, gem, and temporary paths for comparable manifests
 - Survey RubyGems rankings, gem lists, or Bundler lockfiles with resumable results
@@ -65,14 +65,14 @@ The manifest is written to `results/`. The first observation also caches a match
 | --- | --- |
 | `bonebed doctor` | Check kernel, architecture, seccomp, and container support |
 | `bonebed baseline [--refresh]` | Create or refresh the startup baseline |
-| `bonebed dig GEM` | Observe a gem while it is required; common load paths are inferred, or use `--require PATH` |
+| `bonebed dig GEM` | Observe a gem while it is required with only its runtime dependency closure visible; common load paths are inferred, or use `--require PATH` |
 | `bonebed dig GEM --phase install` | Install and observe a gem in disposable home and gem directories |
 | `bonebed survey --top N` | Observe up to 100 gems from RubyGems.org's all-time ranking |
 | `bonebed survey --file FILE` | Observe gems listed as `NAME [VERSION|-] [REQUIRE_PATH]` |
 | `bonebed survey --gemfile Gemfile.lock` | Observe gems from a Bundler lockfile |
 | `bonebed report results --format md` | Summarize collected manifests as Markdown |
 
-Use `--offline` with `dig` or `survey` to return `ENETUNREACH` for observed connections. This is a compatibility check, not a security sandbox. Existing successful survey results are skipped and failures are retried, so interrupted surveys can resume. A survey finishes every entry but exits with status 1 if any observation fails.
+Use `--offline` with `dig` or `survey` to return `ENETUNREACH` for observed connections. This is a compatibility check, not a security sandbox. Existing successful survey results are skipped and failures are retried, so interrupted surveys can resume. Each survey entry runs in a fresh worker process so its memory and operating-system resources are released; a killed worker is recorded and the survey continues. A survey finishes every entry but exits with status 1 if any observation fails.
 
 Use `sinatra - sinatra/base` in a survey file to set a require path without pinning a version. Require paths are ignored during install surveys.
 
@@ -80,12 +80,12 @@ Use `sinatra - sinatra/base` in a survey file to set a require path without pinn
 
 ## How It Works
 
-1. A seccomp filter sends `open`/`openat`, `connect`, and `execve` notifications to Bonebed.
+1. A seccomp filter sends `open`/`openat`, `connect`, `execve`, `clone`, and `clone3` notifications to Bonebed.
 2. Bonebed decodes and records each call, then allows it to continue unless offline mode rejects a connection.
-3. A matching empty-Ruby observation is subtracted as startup noise.
-4. Target stdout and stderr are streamed while the remaining file paths, network endpoints, commands, installed gems, counts, timing, errors, and output are written as JSON. Project paths are normalized to `$PWD`; routine RubyGems cache writes stay in the file list but are excluded from `notable`.
+3. A matching empty-Ruby observation is subtracted as startup noise. Failed read probes for nonexistent paths are discarded; write and network attempts are retained because a notification arrives before the kernel result is known.
+4. Target stdout and stderr are streamed while the remaining file paths, network endpoints, commands, thread creation calls, installed gems, counts, timing, errors, and output are written as JSON. Relative paths are resolved from the target process and project paths are normalized to `$PWD`; routine RubyGems cache writes stay in the file list but are excluded from `notable`.
 
-Captured output is stored as UTF-8; invalid byte sequences are replaced so binary output cannot prevent manifest creation. Failure reports keep compact output previews in the table and the complete output in a folded section.
+Captured output is stored as UTF-8; invalid byte sequences are replaced so binary output cannot prevent manifest creation. Reports show network attempts by target and output emitted by successful require targets. Failure reports keep compact output previews in the table and the complete output in a folded section.
 
 Implementation notes and measured notification overhead are recorded in [NOTES.md](NOTES.md).
 

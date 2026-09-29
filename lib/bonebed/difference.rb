@@ -12,6 +12,7 @@ module Bonebed
         files:,
         network: subtract(observed.fetch(:network), baseline.fetch(:network, {})),
         exec: subtract(observed.fetch(:exec), baseline.fetch(:exec, {})),
+        threads: subtract(observed.fetch(:threads, {}), baseline.fetch(:threads, {})),
         stats: observed.fetch(:stats).merge(openat_after_baseline: files.values.sum { |entries| entries.values.sum }),
         errors: observed.fetch(:errors),
         stdout: observed.fetch(:stdout, ""),

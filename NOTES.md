@@ -11,7 +11,9 @@ Measurements below were taken on 2026-09-09 in the development container: Ruby 4
 - Continue after reading a pointer: `request.continue!(unsafe: true)`; the flag acknowledges the documented TOCTOU risk
 - `request.pid` is the issuing thread ID and aliases `request.tid`
 
-Both `sendmsg` and `sendmmsg` can be placed in a notification policy with version 0.3.0. The library keeps its listener-transfer descriptor available so `sendmsg` can be filtered safely. Bonebed v1 still observes only `open`/`openat`, `connect`, and `execve`.
+Relative `open`/`openat` paths are resolved through `/proc/<tid>/cwd` or the supplied directory descriptor while the issuing thread is stopped. Bonebed checks that read targets exist on the shared mount to remove failed load-path probes. Write and network events remain attempts because seccomp continuation does not return the eventual syscall result to the notifier.
+
+Both `sendmsg` and `sendmmsg` can be placed in a notification policy with version 0.3.0. The library keeps its listener-transfer descriptor available so `sendmsg` can be filtered safely. Bonebed observes `open`/`openat`, `connect`, `execve`, `clone`, and `clone3`.
 
 An `execve` notification was continued successfully and decoded `/usr/local/bin/ruby` from its filename argument. Returning `Errno::ENETUNREACH` from a `connect` handler reached the target as expected.
 

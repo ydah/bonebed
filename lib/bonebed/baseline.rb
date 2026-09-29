@@ -9,6 +9,7 @@ require_relative "session"
 
 module Bonebed
   class Baseline
+    CACHE_VERSION = 2
     Result = Struct.new(:id, :observation, keyword_init: true)
 
     def initialize(cache_dir: ".bonebed/baselines", timeout: 30)
@@ -32,10 +33,10 @@ module Bonebed
 
     def id
       bundle = ENV["BUNDLE_GEMFILE"] ? "bundler" : "nobundler"
-        gems = Gem.loaded_specs.values.map { |specification| "#{specification.name}-#{specification.version}" }.sort
-        local_files = %w[Gemfile.lock bonebed.gemspec].filter_map { |path| File.read(path) if File.file?(path) }
-        digest = Digest::SHA256.hexdigest([*gems, *local_files].join("\0"))[0, 8]
-      "ruby-#{RUBY_VERSION}-#{bundle}-#{RbConfig::CONFIG.fetch("host_cpu")}-#{digest}"
+      gems = Gem.loaded_specs.values.map { |specification| "#{specification.name}-#{specification.version}" }.sort
+      local_files = %w[Gemfile.lock bonebed.gemspec].filter_map { |path| File.read(path) if File.file?(path) }
+      digest = Digest::SHA256.hexdigest([*gems, *local_files].join("\0"))[0, 8]
+      "v#{CACHE_VERSION}-ruby-#{RUBY_VERSION}-#{bundle}-#{RbConfig::CONFIG.fetch("host_cpu")}-#{digest}"
     end
 
     def path
@@ -49,7 +50,8 @@ module Bonebed
     def encode(observation)
       observation.merge(
         network: entries(observation.fetch(:network)),
-        exec: entries(observation.fetch(:exec))
+        exec: entries(observation.fetch(:exec)),
+        threads: entries(observation.fetch(:threads))
       )
     end
 
@@ -62,6 +64,7 @@ module Bonebed
         files: observation.fetch("files").to_h { |mode, values| [mode.to_sym, values] },
         network: decode_entries(observation.fetch("network")),
         exec: decode_entries(observation.fetch("exec")),
+        threads: decode_entries(observation.fetch("threads", [])),
         stats: observation.fetch("stats").transform_keys(&:to_sym),
         errors: observation.fetch("errors")
       }

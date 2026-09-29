@@ -55,6 +55,71 @@ RSpec.describe "fixture manifests" do
     expect(observation.values_at(:stdout, :stderr)).to eq(["captured stdout\n", "captured stderr\n"])
   end
 
+  it "resolves relative writes and drops nonexistent read probes" do
+    skip "Linux seccomp is required" unless RUBY_PLATFORM.include?("linux")
+
+    Dir.mktmpdir("bonebed-relative-") do |root|
+      code = 'Dir.chdir(ARGV.fetch(0)) { File.read("missing") rescue nil; File.write("created", "ok") }'
+      observation = Bonebed::Session.new([RbConfig.ruby, "-e", code, root]).run.snapshot(
+        Bonebed::PathNormalizer.new(cwd: root)
+      )
+
+      expect(observation.dig(:files, :read)).not_to have_key("$PWD/missing")
+      expect(observation.dig(:files, :write)).to have_key("$PWD/created")
+    end
+  end
+
+  it "observes Ruby thread creation" do
+    skip "Linux seccomp is required" unless RUBY_PLATFORM.include?("linux")
+
+    observation = Bonebed::Session.new([RbConfig.ruby, "-e", "Thread.new {}.join"]).run.snapshot(
+      Bonebed::PathNormalizer.new
+    )
+
+    expect(observation.fetch(:threads).keys).to include(include(syscall: satisfy { |value| %w[clone clone3].include?(value) }))
+  end
+
+  it "ends a stream cleanly when another thread closes it" do
+    reader = instance_double(IO, readpartial: nil, closed?: true)
+    allow(reader).to receive(:readpartial).and_raise(IOError, "stream closed in another thread")
+
+    thread = Bonebed::Session.new([RbConfig.ruby, "-e", ""]).send(:stream, reader, StringIO.new)
+
+    expect { thread.value }.not_to raise_error
+  end
+
+  it "releases file descriptors and worker threads between sessions" do
+    skip "Linux procfs and seccomp are required" unless RUBY_PLATFORM.include?("linux")
+
+    descriptors = Dir["/proc/self/fd/*"].size
+    threads = Thread.list.size
+    3.times { Bonebed::Session.new([RbConfig.ruby, "-e", ""]).run }
+
+    expect(Dir["/proc/self/fd/*"].size).to be <= descriptors
+    expect(Thread.list.size).to eq(threads)
+  end
+
+  it "kills target descendants and closes streams on timeout" do
+    skip "Linux seccomp is required" unless RUBY_PLATFORM.include?("linux")
+
+    Dir.mktmpdir("bonebed-timeout-") do |root|
+      marker = File.join(root, "orphan")
+      code = <<~'RUBY'
+        spawn(ARGV.fetch(0), "-e", "sleep 0.8; File.write(ARGV.fetch(0), 'orphan')", ARGV.fetch(1))
+        puts "started"
+        STDOUT.flush
+        sleep 5
+      RUBY
+      collector = Bonebed::Session.new([RbConfig.ruby, "-e", code, RbConfig.ruby, marker], timeout: 0.3).run
+      sleep 0.9
+      observation = collector.snapshot(Bonebed::PathNormalizer.new)
+
+      expect(observation.fetch(:stdout)).to include("started")
+      expect(observation.fetch(:errors)).to include(match(/timed out/))
+      expect(File.exist?(marker)).to be(false)
+    end
+  end
+
   def command(fixture)
     root = File.join(__dir__, "fixtures", "gems", fixture)
     return [RbConfig.ruby, File.join(root, "ext", "bonebed_fixture", "extconf.rb")] if fixture == "extconf"

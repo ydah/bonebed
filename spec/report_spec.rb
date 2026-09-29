@@ -5,23 +5,41 @@ RSpec.describe Bonebed::Report do
     Dir.mktmpdir do |directory|
       manifest = {
         gem: {name: "demo", version: "1.0.0"}, phase: "require", errors: [],
-        files: {read: ["$HOME/.demo", "$PWD/config/demo.yml"], write: ["$PWD/log/demo.log"]}, network: [{family: "inet"}],
+        files: {read: ["$HOME/.demo", "$PWD/config/demo.yml"], write: ["$PWD/log/demo.log"]},
+        network: [{family: "inet", addr: "127.0.0.1", port: 443}],
+        threads: [{syscall: "clone", count: 2}],
         exec: [{path: "/usr/bin/git", argv: ["git", "status"], count: 2},
           {path: "/usr/bin/git", argv: ["git", "log"], count: 1}], stats: {openat_after_baseline: 3}
       }
       File.write(File.join(directory, "demo.json"), JSON.generate(manifest))
       File.write(File.join(directory, "failed.json"), JSON.generate(manifest.merge(
         gem: {name: "broken", version: "2.0.0"}, errors: ["target exited with status 1"],
-        network: [{family: "unix"}], stdout: "starting service", stderr: "LoadError: broken | gem"
+        network: [{family: "unix", path: "/tmp/demo.sock"}], stdout: "starting service", stderr: "LoadError: broken | gem"
       )))
 
       report = described_class.new(directory).markdown
 
       expect(report).to include("Require phase with IP sockets: 1", "Require phase with Unix sockets: 1", "`$HOME/.demo` | 2",
         "## Project files read", "`$PWD/config/demo.yml` | 2", "## Project files written", "`$PWD/log/demo.log` | 2",
+        "## Network attempts by survey target", "`demo 1.0.0 (require)` | `127.0.0.1:443` | 1",
+        "## Thread creation syscalls by survey target", "`demo 1.0.0 (require)` | `clone` | 2",
         "`demo 1.0.0 (require)` | 3 | 1", "<summary>All command paths</summary>",
         "`demo 1.0.0 (require)` | `/usr/bin/git` | 3", "`broken 2.0.0 (require)` | `/usr/bin/git` | 3",
         "`broken 2.0.0 (require)` | target exited with status 1 | starting service | LoadError: broken \\| gem")
+    end
+  end
+  it "shows output emitted by successful require targets" do
+    Dir.mktmpdir do |directory|
+      manifest = {
+        gem: {name: "chatty", version: "1.0.0"}, phase: "require", errors: [],
+        files: {read: [], write: []}, network: [], exec: [], stats: {openat_after_baseline: 0},
+        stdout: "connection failed", stderr: "warning"
+      }
+      File.write(File.join(directory, "chatty.json"), JSON.generate(manifest))
+
+      expect(described_class.new(directory).markdown).to include(
+        "## Output from successful require targets", "`chatty 1.0.0 (require)` | connection failed | warning"
+      )
     end
   end
 

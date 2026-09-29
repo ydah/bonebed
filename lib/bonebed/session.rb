@@ -5,6 +5,7 @@ require_relative "collector"
 require_relative "decoder/openat"
 require_relative "decoder/connect"
 require_relative "decoder/execve"
+require_relative "decoder/clone"
 
 module Bonebed
   class Session
@@ -31,11 +32,14 @@ module Bonebed
       @collector
     rescue Timeout::Error
       terminate(supervisor&.target_pid)
+      terminated = true
       @collector.record_error("session", Timeout::Error.new("timed out after #{@timeout} seconds"))
       @collector.finish(started_at, nil, stdout: stdout_thread&.value.to_s, stderr: stderr_thread&.value.to_s)
       @collector
     ensure
+      terminate(supervisor&.target_pid) if supervisor && !status && !terminated
       [stdout_reader, stdout_writer, stderr_reader, stderr_writer].compact.each { |io| io.close unless io.closed? }
+      [stdout_thread, stderr_thread].compact.each(&:join)
     end
 
     private
@@ -43,8 +47,9 @@ module Bonebed
     def build_supervisor(stdout, stderr)
       require "seccomp/notify"
       open_syscalls = RUBY_PLATFORM.include?("x86_64") ? %i[open openat] : %i[openat]
-      policy = Seccomp::Notify::Policy.new { notify(*open_syscalls, :connect, :execve) }
+      policy = Seccomp::Notify::Policy.new { notify(*open_syscalls, :connect, :execve, :clone, :clone3) }
       supervisor = Seccomp::Notify.spawn(policy) do
+        Process.setpgrp
         STDOUT.reopen(stdout)
         STDERR.reopen(stderr)
         exec(@env, *@command)
@@ -52,6 +57,7 @@ module Bonebed
       open_syscalls.each { |syscall| supervisor.on(syscall) { |request| handle_open(request, syscall) } }
       supervisor.on(:connect) { |request| handle_connect(request) }
       supervisor.on(:execve) { |request| handle_execve(request) }
+      %i[clone clone3].each { |syscall| supervisor.on(syscall) { |request| handle_clone(request, syscall) } }
       supervisor.on_error { |error, request| @collector.record_error(request&.syscall || "supervisor", error) }
       supervisor
     end
@@ -64,7 +70,7 @@ module Bonebed
           captured << chunk
           mirror(destination, chunk)
         end
-      rescue EOFError
+      rescue EOFError, IOError, Errno::EBADF
         captured
       ensure
         reader.close unless reader.closed?
@@ -80,7 +86,9 @@ module Bonebed
 
     def handle_open(request, syscall)
       @collector.record_notification
-      @collector.record_open(Decoder::Openat.call(request, syscall:))
+      event = Decoder::Openat.call(request, syscall:)
+      # ponytail: same-mount check drops failed read probes; retain attempts if targets gain separate mounts.
+      @collector.record_open(event) unless event[:mode] == :read && event[:path].start_with?(File::SEPARATOR) && !File.exist?(event[:path])
     rescue StandardError => error
       @collector.record_error(syscall, error)
     ensure
@@ -115,10 +123,24 @@ module Bonebed
       request.continue!(unsafe: true) unless request.responded?
     end
 
+    def handle_clone(request, syscall)
+      @collector.record_notification
+      event = Decoder::Clone.call(request, syscall:)
+      @collector.record_thread(event) if event
+    rescue StandardError => error
+      @collector.record_error(syscall, error)
+    ensure
+      request.continue!(unsafe: syscall == :clone3) unless request.responded?
+    end
+
     def terminate(pid)
       return unless pid
 
-      Process.kill("KILL", pid)
+      begin
+        Process.kill("KILL", -pid)
+      rescue Errno::ESRCH
+        Process.kill("KILL", pid)
+      end
       Process.waitpid(pid)
     rescue Errno::ECHILD, Errno::ESRCH
       nil

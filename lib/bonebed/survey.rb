@@ -9,9 +9,10 @@ module Bonebed
   class Survey
     STATS_URL = "https://rubygems.org/stats"
 
-    def initialize(dig:, output: $stdout)
+    def initialize(dig:, output: $stdout, isolate: false)
       @dig = dig
       @output = output
+      @isolate = isolate
     end
 
     def run(entries, phase:)
@@ -25,12 +26,11 @@ module Bonebed
         end
 
         @output.puts "[#{index + 1}/#{entries.size}] #{phase} #{name}"
-        @dig.run(name, phase:, version:, require_path:)
-        successful = false unless @dig.last_errors.empty?
-      rescue StandardError => error
-        successful = false
-        @output.puts "  failed: #{error.message}"
-        write_failure(name, version, phase, error)
+        entry_successful, error = @isolate ? isolated_run(name, version, phase, require_path) : run_entry(name, version, phase, require_path)
+        successful = false unless entry_successful
+        @output.puts "  failed: #{error}" if error
+      ensure
+        GC.start unless @isolate
       end
       successful
     end
@@ -79,6 +79,44 @@ module Bonebed
     private_class_method :fetch_page
 
     private
+
+    def run_entry(name, version, phase, require_path)
+      @dig.run(name, phase:, version:, require_path:)
+      [@dig.last_errors.empty?, nil]
+    rescue Gem::LoadError, StandardError => error
+      write_failure(name, version, phase, error)
+      [false, error.message]
+    end
+
+    def isolated_run(name, version, phase, require_path)
+      reader, writer = IO.pipe
+      pid = Process.fork do
+        reader.close
+        Marshal.dump(run_entry(name, version, phase, require_path), writer)
+        writer.close
+        exit! 0
+      end
+      writer.close
+      payload = reader.read
+      _, status = Process.wait2(pid)
+      unless status.success?
+        message = status.signaled? ? "survey worker terminated by signal #{status.termsig}" : "survey worker exited with status #{status.exitstatus}"
+        write_failure(name, version, phase, Error.new(message))
+        return [false, message]
+      end
+
+      Marshal.load(payload)
+    rescue StandardError => error
+      write_failure(name, version, phase, error)
+      [false, error.message]
+    ensure
+      [reader, writer].compact.each { |io| io.close unless io.closed? }
+      begin
+        Process.waitpid(pid) if pid
+      rescue Errno::ECHILD
+        nil
+      end
+    end
 
     def write_failure(name, version, phase, error)
       @dig.write_failure(name, phase:, version: version || "unknown", error:)

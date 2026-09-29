@@ -20,4 +20,12 @@ RSpec.describe Bonebed::Collector do
     expect(observation.values_at(:stdout, :stderr)).to eq(["‘", "�"])
     expect { JSON.generate(observation) }.not_to raise_error
   end
+
+  it "counts thread creation syscalls" do
+    collector = described_class.new
+    collector.record_thread(syscall: "clone")
+    collector.record_thread(syscall: "clone")
+
+    expect(collector.snapshot(Bonebed::PathNormalizer.new)[:threads]).to eq({{syscall: "clone"} => 2})
+  end
 end

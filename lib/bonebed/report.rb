@@ -24,10 +24,13 @@ module Bonebed
         "- Install phase with Unix sockets: #{network_count("install", %w[unix])}",
         "",
         failures,
+        successful_require_output,
         ranking("Home files read", file_accesses("read", "$HOME/")),
         ranking("Project files read", file_accesses("read", "$PWD/")),
         ranking("Project files written", file_accesses("write", "$PWD/")),
+        network_by_target,
         commands_by_target,
+        threads_by_target,
         openat_ranking
       ]
       lines.join("\n").rstrip << "\n"
@@ -79,6 +82,40 @@ module Bonebed
       counts
     end
 
+    def successful_require_output
+      manifests = @manifests.select do |manifest|
+        manifest["phase"] == "require" && manifest.fetch("errors", []).empty? &&
+          !manifest.values_at("stdout", "stderr").all? { |value| value.to_s.empty? }
+      end
+      return "## Output from successful require targets\n\nNone observed.\n" if manifests.empty?
+
+      rows = manifests.map do |manifest|
+        "| `#{label(manifest)}` | #{cell(manifest.fetch("stdout", ""), limit: 500)} | #{cell(manifest.fetch("stderr", ""), limit: 500)} |"
+      end
+      "## Output from successful require targets\n\n| Survey target | Stdout | Stderr |\n| --- | --- | --- |\n#{rows.join("\n")}\n"
+    end
+
+    def network_by_target
+      counts = Hash.new(0)
+      @manifests.each do |manifest|
+        manifest.fetch("network", []).each do |entry|
+          counts[[label(manifest), network_endpoint(entry)]] += entry.fetch("count", 1)
+        end
+      end
+      rows = counts.map { |(target, endpoint), count| [target, endpoint, count] }
+        .sort_by { |target, endpoint, count| [target, -count, endpoint] }
+      return "## Network attempts by survey target\n\nNone observed.\n" if rows.empty?
+
+      "## Network attempts by survey target\n\n| Survey target | Endpoint | Calls |\n| --- | --- | ---: |\n#{rows.map { |target, endpoint, count| "| `#{target}` | `#{endpoint}` | #{count} |" }.join("\n")}\n"
+    end
+
+    def network_endpoint(entry)
+      return "unix:#{entry.fetch("path")}" if entry["family"] == "unix"
+
+      address = entry["family"] == "inet6" ? "[#{entry.fetch("addr")}]" : entry.fetch("addr")
+      "#{address}:#{entry.fetch("port")}"
+    end
+
     def commands_by_target
       counts = Hash.new(0)
       @manifests.each do |manifest|
@@ -110,6 +147,20 @@ module Bonebed
 
         </details>
       MARKDOWN
+    end
+
+    def threads_by_target
+      counts = Hash.new(0)
+      @manifests.each do |manifest|
+        manifest.fetch("threads", []).each do |entry|
+          counts[[label(manifest), entry.fetch("syscall")]] += entry.fetch("count", 1)
+        end
+      end
+      rows = counts.map { |(target, syscall), count| [target, syscall, count] }
+        .sort_by { |target, syscall, count| [target, -count, syscall] }
+      return "## Thread creation syscalls by survey target\n\nNone observed.\n" if rows.empty?
+
+      "## Thread creation syscalls by survey target\n\n| Survey target | Syscall | Calls |\n| --- | --- | ---: |\n#{rows.map { |target, syscall, count| "| `#{target}` | `#{syscall}` | #{count} |" }.join("\n")}\n"
     end
 
     # ponytail: keep Markdown compact; full stdout and stderr remain in the JSON manifest.

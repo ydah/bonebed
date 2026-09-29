@@ -8,6 +8,7 @@ module Bonebed
       @files = {read: Hash.new(0), write: Hash.new(0)}
       @network = Hash.new(0)
       @executions = Hash.new(0)
+      @threads = Hash.new(0)
       @errors = []
       @roundtrips = 0
     end
@@ -22,6 +23,10 @@ module Bonebed
 
     def record_exec(event)
       @executions[[event.fetch(:path), event.fetch(:argv).freeze].freeze] += 1
+    end
+
+    def record_thread(event)
+      @threads[event.freeze] += 1
     end
 
     def record_notification
@@ -51,6 +56,7 @@ module Bonebed
         files: @files.transform_values { |entries| normalize_counts(entries, normalizer) },
         network: normalize_network(normalizer),
         exec: normalize_exec(normalizer),
+        threads: @threads.dup,
         stats: {openat_total: @files.values.sum { |entries| entries.values.sum }, notify_roundtrips: @roundtrips, wall_ms: @wall_ms},
         errors: @errors.dup,
         stdout: @stdout.to_s,

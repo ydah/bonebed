@@ -3,6 +3,8 @@
 require "fileutils"
 require "json"
 require "rbconfig"
+require "rubygems/package"
+require "rubygems/resolver"
 require "rubygems/stub_specification"
 require "tmpdir"
 require "bundler"
@@ -28,10 +30,11 @@ module Bonebed
 
     def run(name, phase: "require", version: nil, require_path: nil)
       validate!(name, phase, version, require_path:)
-      manifest = if phase == "install"
-        Bundler.with_unbundled_env { install(name, version, @baseline.capture) }
-      else
-        require_gem(name, version, require_path, @baseline.capture)
+      manifest = Bundler.with_unbundled_env do
+        Bundler.reset!
+        Gem::Specification.reset
+        baseline = @baseline.capture
+        phase == "install" ? install(name, version, baseline) : require_gem(name, version, require_path, baseline)
       end
       @last_errors = manifest.fetch("errors")
       FileUtils.mkdir_p(@results_dir)
@@ -71,26 +74,61 @@ module Bonebed
     def require_gem(name, version, require_path, baseline)
       specification = Gem::Specification.find_by_name(name, version ? "=#{version}" : Gem::Requirement.default)
       require_path ||= inferred_require_path(specification)
-      code = 'gem ARGV[0], "=#{ARGV[1]}"; require ARGV[2]'
-      collector = Session.new([RbConfig.ruby, "-e", code, name, specification.version.to_s, require_path], timeout: @timeout, offline: @offline).run
-      normalizer = PathNormalizer.new
-      manifest(name, specification.version.to_s, "require", collector.snapshot(normalizer), baseline,
-        platform: specification.platform.to_s, require_path:)
+      unless require_path
+        executables = specification.executables.join(", ")
+        detail = executables.empty? ? "" : "; executables: #{executables}"
+        error = Gem::LoadError.new("#{specification.full_name} has no requirable entrypoint#{detail}; use --require PATH if needed")
+        return manifest(name, specification.version.to_s, "require", empty_observation(error), baseline,
+          platform: specification.platform.to_s)
+      end
+
+      Dir.mktmpdir("bonebed-require-") do |root|
+        gem_home = File.join(root, "gems")
+        isolate_runtime_gems(specification, gem_home)
+        env = {"GEM_HOME" => gem_home, "GEM_PATH" => gem_home}
+        code = 'gem ARGV[0], "=#{ARGV[1]}"; require ARGV[2]'
+        collector = Session.new([RbConfig.ruby, "-e", code, name, specification.version.to_s, require_path],
+          env:, timeout: @timeout, offline: @offline).run
+        normalizer = PathNormalizer.new(gem_paths: [gem_home, *Gem.path], tmpdir: root)
+        manifest(name, specification.version.to_s, "require", collector.snapshot(normalizer), baseline,
+          platform: specification.platform.to_s, require_path:)
+      end
     end
 
     def inferred_require_path(specification)
       paths = [specification.name, specification.name.tr("-", "/")]
       paths.find do |path|
         specification.contains_requirable_file?(path)
-      end || matching_top_level_file(specification) || specification.name
+      end || matching_top_level_file(specification)
     end
 
     def matching_top_level_file(specification)
       normalized_name = specification.name.delete("-_")
       paths = specification.full_require_paths.flat_map do |root|
-        Dir[File.join(root, "*.rb")].map { |file| File.basename(file, ".rb") }
+        Dir[File.join(root, "*.{rb,#{RbConfig::CONFIG.fetch("DLEXT")}}")].map { |file| File.basename(file, ".*") }
       end.uniq
       paths.find { |path| path.delete("-_") == normalized_name } || (paths.first if paths.one?)
+    end
+
+    def isolate_runtime_gems(specification, gem_home)
+      dependency = Gem::Dependency.new(specification.name, "=#{specification.version}")
+      specifications = Gem::Resolver.for_current_gems([dependency]).resolve.map(&:spec).uniq(&:full_name)
+      FileUtils.mkdir_p([File.join(gem_home, "gems"), File.join(gem_home, "specifications")])
+      specifications.each do |resolved|
+        FileUtils.ln_s(resolved.full_gem_path, File.join(gem_home, "gems", resolved.full_name))
+        FileUtils.ln_s(resolved.loaded_from, File.join(gem_home, "specifications", File.basename(resolved.loaded_from)))
+        link_extension(resolved, gem_home)
+      end
+    end
+
+    def link_extension(specification, gem_home)
+      extension_dir = specification.extension_dir
+      prefix = "#{specification.base_dir}/"
+      return unless Dir.exist?(extension_dir) && extension_dir.start_with?(prefix)
+
+      destination = File.join(gem_home, extension_dir.delete_prefix(prefix))
+      FileUtils.mkdir_p(File.dirname(destination))
+      FileUtils.ln_s(extension_dir, destination)
     end
 
     def install(name, version, baseline)
@@ -104,10 +142,21 @@ module Bonebed
         collector = Session.new(command, env:, timeout: @timeout, offline: @offline).run
         gems = installed_gems(gem_home)
         installed = gems.find { |gem| gem.fetch("name") == name }
+        cached = cached_gem(gem_home, name)
         normalizer = PathNormalizer.new(home:, gem_paths: [gem_home, *Gem.path], tmpdir: root)
-        manifest(name, installed&.fetch("version") || version || "unknown", "install", collector.snapshot(normalizer), baseline,
-          platform: installed&.fetch("platform"), installed_gems: gems)
+        manifest(name, installed&.fetch("version") || cached&.version&.to_s || version || "unknown", "install",
+          collector.snapshot(normalizer), baseline,
+          platform: installed&.fetch("platform") || cached&.platform&.to_s, installed_gems: gems)
       end
+    end
+
+    def cached_gem(gem_home, name)
+      Dir[File.join(gem_home, "cache", "*.gem")].filter_map do |path|
+        specification = Gem::Package.new(path).spec
+        specification if specification.name == name
+      rescue Gem::Package::Error
+        nil
+      end.max_by(&:version)
     end
 
     def installed_gems(gem_home)
@@ -136,6 +185,7 @@ module Bonebed
         "files" => stringify_keys(files),
         "network" => counted_entries(observation.fetch(:network)),
         "exec" => counted_entries(observation.fetch(:exec)),
+        "threads" => counted_entries(observation.fetch(:threads)),
         "stats" => stringify_keys(observation.fetch(:stats)),
         "errors" => observation.fetch(:errors),
         "stdout" => observation.fetch(:stdout, ""),
@@ -155,7 +205,7 @@ module Bonebed
 
     def empty_observation(error = nil)
       {
-        files: {read: {}, write: {}}, network: {}, exec: {},
+        files: {read: {}, write: {}}, network: {}, exec: {}, threads: {},
         stats: {openat_total: 0, notify_roundtrips: 0, wall_ms: 0},
         errors: error ? ["#{error.class}: #{error.message}"] : [], stdout: "", stderr: ""
       }

@@ -12,12 +12,71 @@ RSpec.describe Bonebed::Survey do
     expect(dig).to have_received(:run).twice
   end
 
+  it "continues after a missing gem and records its failure" do
+    error = Gem::LoadError.new("missing gem")
+    dig = instance_double(Bonebed::Dig, result_exists?: false, run: nil, last_errors: [], write_failure: nil)
+    allow(dig).to receive(:run).with("missing", phase: "require", version: nil, require_path: nil).and_raise(error)
+    entries = [{name: "missing", version: nil}, {name: "rake", version: nil}]
+
+    expect(described_class.new(dig:, output: StringIO.new).run(entries, phase: "require")).to be(false)
+    expect(dig).to have_received(:run).twice
+    expect(dig).to have_received(:write_failure).with("missing", phase: "require", version: "unknown", error:)
+  end
+
   it "passes an entry's require path to dig" do
     dig = instance_double(Bonebed::Dig, result_exists?: false, run: nil, last_errors: [])
     entry = {name: "sinatra", version: nil, require_path: "sinatra/base"}
 
     expect(described_class.new(dig:, output: StringIO.new).run([entry], phase: "require")).to be(true)
     expect(dig).to have_received(:run).with("sinatra", phase: "require", version: nil, require_path: "sinatra/base")
+  end
+
+  it "reclaims unreachable objects after every survey entry" do
+    dig = instance_double(Bonebed::Dig, result_exists?: false, run: nil, last_errors: [])
+    allow(GC).to receive(:start)
+
+    described_class.new(dig:, output: StringIO.new).run([{name: "rake"}, {name: "json"}], phase: "require")
+
+    expect(GC).to have_received(:start).twice
+  end
+
+  it "runs isolated survey entries in fresh processes" do
+    file = Tempfile.new
+    path = file.path
+    file.close
+    dig = Object.new
+    dig.define_singleton_method(:result_exists?) { |*| false }
+    dig.define_singleton_method(:run) do |*|
+      File.open(path, "a") { |output| output.puts(Process.pid) }
+      @last_errors = []
+    end
+    dig.define_singleton_method(:last_errors) { @last_errors }
+
+    expect(described_class.new(dig:, output: StringIO.new, isolate: true).run([{name: "rake"}, {name: "json"}], phase: "require")).to be(true)
+    expect(File.readlines(path, chomp: true).map(&:to_i)).to all(satisfy { |pid| pid != Process.pid })
+  ensure
+    file&.unlink
+  end
+
+  it "continues after an isolated worker is killed" do
+    file = Tempfile.new
+    path = file.path
+    file.close
+    dig = Object.new
+    dig.define_singleton_method(:result_exists?) { |*| false }
+    dig.define_singleton_method(:run) do |name, **|
+      Process.kill("KILL", Process.pid) if name == "killed"
+      File.open(path, "a") { |output| output.puts(name) }
+      @last_errors = []
+    end
+    dig.define_singleton_method(:last_errors) { @last_errors }
+    dig.define_singleton_method(:write_failure) { |*| nil }
+    entries = [{name: "killed"}, {name: "continued"}]
+
+    expect(described_class.new(dig:, output: StringIO.new, isolate: true).run(entries, phase: "require")).to be(false)
+    expect(File.read(path)).to eq("continued\n")
+  ensure
+    file&.unlink
   end
 
   it "extracts unique gem names from the official stats pages" do
