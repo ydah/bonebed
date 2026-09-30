@@ -27,7 +27,8 @@ module Bonebed
       private_class_method :resolve
 
       def signed(value)
-        value >= (1 << 63) ? value - (1 << 64) : value
+        value &= (1 << 32) - 1
+        value >= (1 << 31) ? value - (1 << 32) : value
       end
       private_class_method :signed
 

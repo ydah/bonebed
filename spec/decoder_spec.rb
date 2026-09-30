@@ -23,7 +23,7 @@ RSpec.describe Bonebed::Decoder do
     end
 
     it "resolves relative paths from the target cwd" do
-      at_fdcwd = (1 << 64) - 100
+      at_fdcwd = (1 << 32) - 100
       request = instance_double("request", args: [at_fdcwd, 123, File::RDONLY], pid: 42)
       allow(request).to receive(:read_string).with(123).and_return("./log/demo.log")
       allow(File).to receive(:readlink).with("/proc/42/cwd").and_return("/app")
