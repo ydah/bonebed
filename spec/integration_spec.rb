@@ -59,8 +59,8 @@ RSpec.describe "fixture manifests" do
     skip "Linux seccomp is required" unless RUBY_PLATFORM.include?("linux")
 
     Dir.mktmpdir("bonebed-relative-") do |root|
-      code = 'Dir.chdir(ARGV.fetch(0)) { File.read("missing") rescue nil; File.write("created", "ok") }'
-      observation = Bonebed::Session.new([RbConfig.ruby, "-e", code, root]).run.snapshot(
+      code = 'File.read("missing") rescue nil; File.write("created", "ok")'
+      observation = Bonebed::Session.new([RbConfig.ruby, "-e", code], cwd: root).run.snapshot(
         Bonebed::PathNormalizer.new(cwd: root)
       )
 

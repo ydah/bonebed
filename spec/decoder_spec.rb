@@ -39,6 +39,15 @@ RSpec.describe Bonebed::Decoder do
       expect(described_class.call(request, syscall: :openat)).to eq(path: "/app/config/demo.yml", mode: :read)
     end
 
+    it "falls back to the target cwd when procfs is unavailable" do
+      at_fdcwd = (1 << 64) - 100
+      request = instance_double("request", args: [at_fdcwd, 123, File::RDONLY], pid: 42)
+      allow(request).to receive(:read_string).with(123).and_return("missing")
+      allow(File).to receive(:readlink).with("/proc/42/cwd").and_raise(Errno::EACCES)
+
+      expect(described_class.call(request, syscall: :openat, cwd: "/app")).to eq(path: "/app/missing", mode: :read)
+    end
+
     it "classifies file creation as a write" do
       request = instance_double("request", args: [0, 123, File::RDONLY | File::CREAT])
       allow(request).to receive(:read_string).with(123).and_return("/tmp/demo")

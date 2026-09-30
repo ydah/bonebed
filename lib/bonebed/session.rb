@@ -9,9 +9,10 @@ require_relative "decoder/clone"
 
 module Bonebed
   class Session
-    def initialize(command, env: {}, timeout: 30, offline: false, collector: Collector.new)
+    def initialize(command, env: {}, cwd: Dir.pwd, timeout: 30, offline: false, collector: Collector.new)
       @command = command
       @env = env
+      @cwd = cwd
       @timeout = timeout
       @offline = offline
       @collector = collector
@@ -52,7 +53,7 @@ module Bonebed
         Process.setpgrp
         STDOUT.reopen(stdout)
         STDERR.reopen(stderr)
-        exec(@env, *@command)
+        exec(@env, *@command, chdir: @cwd)
       end
       open_syscalls.each { |syscall| supervisor.on(syscall) { |request| handle_open(request, syscall) } }
       supervisor.on(:connect) { |request| handle_connect(request) }
@@ -86,7 +87,7 @@ module Bonebed
 
     def handle_open(request, syscall)
       @collector.record_notification
-      event = Decoder::Openat.call(request, syscall:)
+      event = Decoder::Openat.call(request, syscall:, cwd: @cwd)
       # ponytail: same-mount check drops failed read probes; retain attempts if targets gain separate mounts.
       @collector.record_open(event) unless event[:mode] == :read && event[:path].start_with?(File::SEPARATOR) && !File.exist?(event[:path])
     rescue StandardError => error
