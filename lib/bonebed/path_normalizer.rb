@@ -12,6 +12,7 @@ module Bonebed
     end
 
     def call(path)
+      path = File.expand_path(path, @cwd) unless path.start_with?(File::SEPARATOR, "\0")
       gem_path = @gem_paths.find { |root| inside?(path, root) }
       return replace(path, gem_path, "$GEM_HOME") if gem_path
       return replace(path, @cwd, "$PWD") if inside?(path, @cwd)

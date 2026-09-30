@@ -11,6 +11,7 @@ RSpec.describe Bonebed::PathNormalizer do
     expect(normalizer.call("/home/test/.gitconfig")).to eq("$HOME/.gitconfig")
     expect(normalizer.call("/tmp/d20260909-1")).to eq("$TMPDIR/<random>")
     expect(normalizer.call("/proc/123/status")).to eq("/proc/<pid>/status")
-    expect(normalizer.call("relative/path")).to eq("relative/path")
+    expect(normalizer.call("relative/path")).to eq("$PWD/relative/path")
+    expect(normalizer.call("\0abstract")).to eq("\0abstract")
   end
 end
