@@ -152,7 +152,7 @@ module Bonebed
         File.write(File.join(environment.project, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n\nBUNDLED WITH\n   #{Bundler::VERSION}\n")
         observation = Session.new(command, env: environment.env, cwd: environment.project, unsetenv_others: true,
           **session_options(environment).merge(quiet_target: true)).run.snapshot(environment.normalizer)
-        errors = observation.fetch(:errors) + observation.fetch(:observer_errors)
+        errors = observation.fetch(:errors) + observation.fetch(:observer_errors).reject { |error| error.start_with?("isolation:") }
         raise Error, "bundle baseline failed: #{errors.join("; ")}" unless errors.empty?
 
         identity = [command, RUBY_REVISION, Gem::VERSION, Bundler::VERSION, @run.fetch("mode")]

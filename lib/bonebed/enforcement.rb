@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "yaml"
+require "rbconfig"
 
 module Bonebed
   module Enforcement
@@ -11,8 +12,7 @@ module Bonebed
       keys = %w[read_paths write_paths tcp_connect_ports tcp_bind_ports]
       raise ArgumentError, "invalid enforcement policy" unless config.is_a?(Hash) && (config.keys - keys).empty?
 
-      runtime = %w[/usr /lib /lib64 /etc/ld.so.cache /etc/hosts /etc/resolv.conf /etc/nsswitch.conf /dev/urandom /dev/random]
-      result = {read_paths: runtime.select { |entry| File.exist?(entry) }, write_paths: [environment.root, "/dev/null"],
+      result = {read_paths: runtime_paths, write_paths: [environment.root, "/dev/null"],
                 tcp_connect_ports: [], tcp_bind_ports: []}
       config.each do |key, values|
         raise ArgumentError, "#{key} must be an array" unless values.is_a?(Array)
@@ -34,6 +34,12 @@ module Bonebed
       result
     rescue Psych::Exception => error
       raise ArgumentError, "invalid enforcement YAML: #{error.message}"
+    end
+
+    def runtime_paths
+      paths = %w[/usr /lib /lib64 /etc/ld.so.cache /etc/hosts /etc/resolv.conf /etc/nsswitch.conf /dev/urandom /dev/random]
+      paths << RbConfig::CONFIG.fetch("prefix")
+      paths.uniq.select { |entry| File.exist?(entry) }
     end
 
     def generate(manifests)

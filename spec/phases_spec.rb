@@ -5,6 +5,17 @@ require "tmpdir"
 require "fileutils"
 
 RSpec.describe "isolated observation phases" do
+  it "retains namespace fallback diagnostics without treating a successful baseline as a target failure" do
+    skip "Linux seccomp required" unless RUBY_PLATFORM.include?("linux")
+    allow(Bonebed::Isolation).to receive(:offline_command).and_raise(Bonebed::Isolation::Unavailable, "fixture namespace denied")
+    Dir.mktmpdir do |directory|
+      result = Bonebed::Baseline.new(cache_dir: directory).capture(offline: true)
+      expect(result.observation[:errors]).to be_empty
+      expect(result.observation[:observer_errors]).to eq(["isolation: Bonebed::Isolation::Unavailable: fixture namespace denied"])
+      expect(result.observation[:isolation]).to eq("syscall_fallback")
+    end
+  end
+
   it "installs locally then requires a gem in one disposable environment" do
     skip "Linux seccomp is required" unless RUBY_PLATFORM.include?("linux")
     Dir.mktmpdir do |root|

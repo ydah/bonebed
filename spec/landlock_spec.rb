@@ -99,7 +99,7 @@ RSpec.describe Bonebed::Landlock do
       pid = fork do
         reader.close
         IO.for_fd(1, autoclose: false).reopen(writer)
-        described_class.restrict!(read_paths: %w[/usr /lib /bin].select { |path| File.exist?(path) }, write_paths: [])
+        described_class.restrict!(read_paths: Bonebed::Enforcement.runtime_paths, write_paths: [])
         exec(RbConfig.ruby, "-e", 'begin; File.read(ARGV[0]); puts "escaped"; rescue Errno::EACCES; puts "denied"; end', denied, unsetenv_others: true)
       end
       writer.close

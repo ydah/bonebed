@@ -79,7 +79,7 @@ RSpec.describe Bonebed::Isolation do
     result = reader.read
     Process.wait(pid)
     expect(result).to eq("isolated").or start_with("unavailable: ")
-    expect(result).to include("unshare") if result.start_with?("unavailable:")
+    expect(result).to include("network namespace unavailable") if result.start_with?("unavailable:")
   ensure
     reader&.close
     writer&.close unless writer&.closed?

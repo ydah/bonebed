@@ -27,7 +27,8 @@ RSpec.describe "expanded syscall observation" do
     end
   end
 
-  it "records DNS intent from unconnected UDP and refuses the send in offline mode" do
+  it "records DNS intent and refuses unconnected UDP when namespaces are unavailable" do
+    allow(Bonebed::Isolation).to receive(:offline_command).and_raise(Bonebed::Isolation::Unavailable, "fixture namespace denied")
     code = <<~'RUBY'
       require "socket"
       packet = [1, 0x100, 1, 0, 0, 0].pack("n6") + "\x05probe\x07example\x07invalid\0" + [1, 1].pack("n2")
@@ -40,7 +41,8 @@ RSpec.describe "expanded syscall observation" do
     RUBY
     observation = Bonebed::Session.new([RbConfig.ruby, "-e", code], offline: true).run.snapshot(Bonebed::PathNormalizer.new)
     expect(observation[:errors]).to be_empty
-    expect(observation[:observer_errors]).to be_empty
+    expect(observation[:observer_errors]).to eq(["isolation: Bonebed::Isolation::Unavailable: fixture namespace denied"])
+    expect(observation[:isolation]).to eq("syscall_fallback")
     expect(observation[:dns].keys).to include(name: "probe.example.invalid")
     expect(observation[:network].keys).to include(family: "inet", addr: "127.0.0.1", port: 53)
   end

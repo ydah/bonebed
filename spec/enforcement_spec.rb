@@ -32,6 +32,7 @@ RSpec.describe Bonebed::Enforcement do
       path = File.join(environment.root, "policy.yml")
       File.write(path, "read_paths: ['$HOME/.aws']\ntcp_connect_ports: [443]\n")
       policy = described_class.load(path, environment)
+      expect(policy[:read_paths]).to include(RbConfig::CONFIG.fetch("prefix"))
       expect(policy[:read_paths]).to include(File.join(environment.home, ".aws"))
       expect(policy[:write_paths]).to include(environment.root)
       expect(policy[:tcp_connect_ports]).to eq([443])

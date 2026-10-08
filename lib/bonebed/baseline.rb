@@ -36,7 +36,7 @@ module Bonebed
         end
       end
       observation = observe(phase, **mode)
-      errors = observation.fetch(:errors) + observation.fetch(:observer_errors)
+      errors = observation.fetch(:errors) + observation.fetch(:observer_errors).reject { |error| error.start_with?("isolation:") }
       raise Error, errors.join("; ") unless errors.empty?
 
       FileUtils.mkdir_p(@cache_dir)
