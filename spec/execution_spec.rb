@@ -14,7 +14,7 @@ RSpec.describe "execution metadata and limits" do
   end
 
   it "normalizes paths embedded in argv without changing ordinary arguments" do
-    expect(normalizer.scrub("--include=/gems/demo/lib:/tmp/build123/object.o")).to eq("--include=$GEM_HOME/demo/lib:$TMPDIR/<random>")
+    expect(normalizer.scrub("--include=/gems/demo/lib:/tmp/build123/object.o")).to eq("--include=$GEM_HOME/demo/lib:$TMPDIR/<random>/object.o")
     expect(normalizer.scrub("hello /home/test/.aws/credentials")).to eq("hello $HOME/.aws/credentials")
     expect(normalizer.scrub("/home/test-other/name")).to eq("/home/test-other/name")
     expect(normalizer.scrub("relative.rb")).to eq("relative.rb")

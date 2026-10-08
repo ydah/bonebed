@@ -62,6 +62,9 @@ module Bonebed
 
     def self.lockfile(path)
       parser = Bundler::LockfileParser.new(Bundler.read_file(path))
+      unsupported = parser.specs.reject { |spec| spec.source.is_a?(Bundler::Source::Rubygems) }.map(&:name)
+      raise ArgumentError, "unsupported lockfile sources: #{unsupported.join(", ")}" unless unsupported.empty?
+
       parser.specs.group_by(&:name).map do |name, specifications|
         {name:, version: specifications.max_by(&:version).version.to_s}
       end.sort_by { |entry| entry[:name] }

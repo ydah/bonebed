@@ -106,4 +106,12 @@ RSpec.describe Bonebed::Survey do
 
     expect(described_class.lockfile(path)).to eq([{name: "rake", version: "13.4.2"}])
   end
+
+  it "rejects non-registry sources rather than observing an unrelated registry gem" do
+    Tempfile.create("lock") do |file|
+      file.write("PATH\n  remote: ../local\n  specs:\n    local-demo (1.0.0)\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  local-demo!\n")
+      file.flush
+      expect { described_class.lockfile(file.path) }.to raise_error(ArgumentError, /unsupported.*local-demo/)
+    end
+  end
 end

@@ -1,13 +1,15 @@
 # frozen_string_literal: true
 
 require "json"
+require "cgi"
+require_relative "result_store"
 
 module Bonebed
   class Report
     def initialize(directory)
       raise ArgumentError, "results directory does not exist: #{directory}" unless Dir.exist?(directory)
 
-      @manifests = Dir[File.join(directory, "*.json")].map { |path| JSON.parse(File.read(path)) }
+      @manifests = ResultStore.read(directory)
     end
 
     def markdown
@@ -23,7 +25,9 @@ module Bonebed
         "- Install phase with IP sockets: #{network_count("install", %w[inet inet6])}",
         "- Install phase with Unix sockets: #{network_count("install", %w[unix])}",
         "",
+        capability_matrix,
         failures,
+        observer_failures,
         successful_require_output,
         ranking("Home files read", file_accesses("read", "$HOME/")),
         ranking("Project files read", file_accesses("read", "$PWD/")),
@@ -37,6 +41,31 @@ module Bonebed
     end
 
     private
+
+    def capability_matrix
+      rows = @manifests.map do |manifest|
+        flags = manifest["capabilities"] || ResultStore.capabilities(manifest)
+        home = flags.values_at("home_read", "home_write").any?(true)
+        values = [flags["network"], flags["dns"], flags["exec"], flags["process"], home,
+          flags["project_write"], flags["native_extension"], flags["threads"], flags["plugin"]]
+        "| `#{label(manifest)}` | #{values.map { |value|
+          if value.nil?
+            "?"
+          else
+            value ? "✓" : "—"
+          end
+        }.join(" | ")} |"
+      end
+      "## Capabilities\n\n`?` means unavailable in this observation. Capabilities describe observed activity, not a safety verdict.\n\n| Survey target | Net | DNS | Exec | Process | Home | PWD | Native | Thread | Plugin |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n#{rows.join("\n")}\n"
+    end
+
+    def observer_failures
+      failed = @manifests.select { |manifest| !Array(manifest["observer_errors"]).empty? }
+      return "## Observer errors\n\nNone observed.\n" if failed.empty?
+
+      rows = failed.map { |manifest| "| `#{label(manifest)}` | #{cell(manifest.fetch("observer_errors").join("; "))} |" }
+      "## Observer errors\n\n| Survey target | Errors |\n| --- | --- |\n#{rows.join("\n")}\n"
+    end
 
     def network_count(phase, families)
       @manifests.count do |manifest|
@@ -77,7 +106,9 @@ module Bonebed
     def file_accesses(mode, prefix)
       counts = Hash.new(0)
       @manifests.each do |manifest|
-        manifest.dig("files", mode)&.each { |path| counts[path] += 1 if path.start_with?(prefix) }
+        paths = manifest.dig("files", mode)
+        paths = paths.values.flatten if paths.is_a?(Hash)
+        Array(paths).each { |path| counts[path] += 1 if path.start_with?(prefix) }
       end
       counts
     end
@@ -106,7 +137,7 @@ module Bonebed
         .sort_by { |target, endpoint, count| [target, -count, endpoint] }
       return "## Network attempts by survey target\n\nNone observed.\n" if rows.empty?
 
-      "## Network attempts by survey target\n\n| Survey target | Endpoint | Calls |\n| --- | --- | ---: |\n#{rows.map { |target, endpoint, count| "| `#{target}` | `#{endpoint}` | #{count} |" }.join("\n")}\n"
+      "## Network attempts by survey target\n\n| Survey target | Endpoint | Calls |\n| --- | --- | ---: |\n#{rows.map { |target, endpoint, count| "| `#{target}` | `#{cell(endpoint)}` | #{count} |" }.join("\n")}\n"
     end
 
     def network_endpoint(entry)
@@ -131,7 +162,7 @@ module Bonebed
       summary = rows.group_by(&:first).map do |target, entries|
         "| `#{target}` | #{entries.sum { |entry| entry.fetch(2) }} | #{entries.size} |"
       end.join("\n")
-      details = rows.map { |target, command, count| "| `#{target}` | `#{command}` | #{count} |" }.join("\n")
+      details = rows.map { |target, command, count| "| `#{target}` | `#{cell(command)}` | #{count} |" }.join("\n")
       <<~MARKDOWN
         ## Commands observed by survey target
 
@@ -161,7 +192,7 @@ module Bonebed
         .sort_by { |target, syscall, count| [target, -count, syscall] }
       return "## Thread creation syscalls by survey target\n\nNone observed.\n" if rows.empty?
 
-      "## Thread creation syscalls by survey target\n\n| Survey target | Syscall | Calls |\n| --- | --- | ---: |\n#{rows.map { |target, syscall, count| "| `#{target}` | `#{syscall}` | #{count} |" }.join("\n")}\n"
+      "## Thread creation syscalls by survey target\n\n| Survey target | Syscall | Calls |\n| --- | --- | ---: |\n#{rows.map { |target, syscall, count| "| `#{target}` | `#{cell(syscall)}` | #{count} |" }.join("\n")}\n"
     end
 
     # ponytail: keep Markdown compact; full stdout and stderr remain in the JSON manifest.
@@ -169,7 +200,7 @@ module Bonebed
       text = value.to_s.gsub(/\s+/, " ").strip
       text = "—" if text.empty?
       text = "#{text[0, limit]}…" if limit && text.length > limit
-      text.gsub("|", "\\|")
+      CGI.escapeHTML(text).gsub("`", "&#96;").gsub("|", "\\|")
     end
 
     def output_block(value)
@@ -180,16 +211,17 @@ module Bonebed
       rows = counts.sort_by { |name, count| [-count, name] }.first(10)
       return "## #{title}\n\nNone observed.\n" if rows.empty?
 
-      "## #{title}\n\n| Item | Count |\n| --- | ---: |\n#{rows.map { |name, count| "| `#{name}` | #{count} |" }.join("\n")}\n"
+      "## #{title}\n\n| Item | Count |\n| --- | ---: |\n#{rows.map { |name, count| "| `#{cell(name)}` | #{count} |" }.join("\n")}\n"
     end
 
     def openat_ranking
-      rows = @manifests.sort_by { |manifest| -manifest.dig("stats", "openat_after_baseline").to_i }.first(10)
-      ranking("Open calls after baseline", rows.to_h { |manifest| [label(manifest), manifest.dig("stats", "openat_after_baseline").to_i] })
+      ranking("Open calls after baseline", @manifests.to_h do |manifest|
+        [label(manifest), (manifest.dig("stats", "open_after_baseline") || manifest.dig("stats", "openat_after_baseline")).to_i]
+      end)
     end
 
     def label(manifest)
-      "#{manifest.dig("gem", "name")} #{manifest.dig("gem", "version")} (#{manifest["phase"]})"
+      cell("#{manifest.dig("gem", "name")} #{manifest.dig("gem", "version")} (#{manifest["phase"]})")
     end
   end
 end

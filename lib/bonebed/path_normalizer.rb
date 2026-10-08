@@ -17,7 +17,11 @@ module Bonebed
       return replace(path, gem_path, "$GEM_HOME") if gem_path
       return replace(path, @cwd, "$PWD") if inside?(path, @cwd)
       return replace(path, @home, "$HOME") if inside?(path, @home)
-      return (path == @tmpdir) ? "$TMPDIR" : "$TMPDIR/<random>" if inside?(path, @tmpdir)
+      if inside?(path, @tmpdir)
+        return "$TMPDIR" if path == @tmpdir
+
+        return path.sub(%r{\A#{Regexp.escape(@tmpdir)}/[^/]+}, "$TMPDIR/<random>")
+      end
 
       path.sub(%r{\A/proc/(?:\d+|self|thread-self)/task/\d+(?=/|\z)}, "/proc/<pid>/task/<tid>")
         .sub(%r{\A/proc/\d+(?=/|\z)}, "/proc/<pid>")

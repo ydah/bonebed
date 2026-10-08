@@ -1,0 +1,708 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ydah/bonebed/raw/main/schema/manifest-v2.json",
+  "title": "Bonebed manifest v2",
+  "description": "Observed syscall attempts. Missing historical metadata is null; additive properties remain compatible.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "tool",
+    "run",
+    "gem",
+    "phase",
+    "target",
+    "capabilities",
+    "files",
+    "stats",
+    "errors",
+    "observer_errors",
+    "dependencies",
+    "canary_hits",
+    "stdout_truncated",
+    "stderr_truncated"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "tool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "const": "bonebed"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seccomp_notify": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "seccomp_notify"
+      ]
+    },
+    "run": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "started_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mode": {
+              "type": "object",
+              "properties": {
+                "offline": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "honeypot": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "env_profile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "writes_only": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "required": [
+            "id",
+            "started_at",
+            "mode"
+          ]
+        }
+      ]
+    },
+    "gem": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "require_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "extensions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "executables": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "rubygems_plugin": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "phase": {
+      "enum": [
+        "install",
+        "require",
+        "plugin",
+        "exec"
+      ]
+    },
+    "environment": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ruby": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "arch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kernel": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "baseline_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "exit_status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "signal": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "timed_out": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "exit_status",
+        "signal",
+        "timed_out"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "dns": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "exec": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "process": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "threads": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "home_read": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "home_write": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "project_write": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "sensitive_read": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "native_extension": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "plugin": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "suspicious_syscalls": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "anti_analysis": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "properties": {
+        "read": {
+          "type": "object",
+          "properties": {
+            "self": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "resolver": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "other": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "self",
+            "resolver",
+            "other"
+          ]
+        },
+        "write": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notable": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "delete": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mkdir": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rename": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "chmod": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "link": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "read",
+        "write"
+      ]
+    },
+    "network": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "addr": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "path": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "family"
+        ]
+      }
+    },
+    "exec": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "argv_truncated": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    },
+    "threads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "syscall": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "syscall"
+        ]
+      }
+    },
+    "stats": {
+      "type": "object",
+      "properties": {
+        "open_total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "open_after_baseline": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "notify_roundtrips": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "wall_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "observer_errors": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "dependencies": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ]
+      }
+    },
+    "canary_hits": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "seen_in": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "seen_in"
+        ]
+      }
+    },
+    "stdout": {
+      "type": "string"
+    },
+    "stderr": {
+      "type": "string"
+    },
+    "stdout_truncated": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "stderr_truncated": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "processes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "dns": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "name"
+            ]
+          }
+        ]
+      }
+    },
+    "listen": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "addr": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "path": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "family"
+        ]
+      }
+    },
+    "suspicious": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "anti_analysis": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

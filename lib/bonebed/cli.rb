@@ -26,6 +26,10 @@ module Bonebed
         dig(arguments)
       when "survey"
         survey(arguments)
+      when "migrate"
+        raise ArgumentError, "results directory is required" unless arguments.one?
+        puts ResultStore.new(arguments.first).migrate
+        EXIT_OK
       when "report"
         report(arguments)
       when nil, "help", "--help", "-h"
@@ -34,9 +38,9 @@ module Bonebed
             bonebed --version
             bonebed doctor
             bonebed baseline [--refresh]
-            bonebed dig GEM [--phase require|install] [--require PATH] [--version VERSION] [--offline]
-            bonebed dig --gemfile Gemfile.lock [--phase require|install]
-            bonebed survey (--top N | --file FILE | --gemfile FILE) [--phase require|install]
+            bonebed dig GEM [--phase require|install|all] [--require PATH] [--version VERSION] [--offline]
+            bonebed dig --gemfile Gemfile.lock [--phase require|install|all]
+            bonebed survey (--top N | --file FILE | --gemfile FILE) [--phase require|install|all]
             bonebed report RESULTS_DIR [--format md]
         HELP
         EXIT_OK
@@ -61,6 +65,7 @@ module Bonebed
           return EXIT_OK
         }
         parser.on("--phase PHASE") { |value| options[:phase] = value }
+        parser.on("--platform PLATFORM") { |value| options[:platform] = value }
         parser.on("--require PATH") { |value| options[:require_path] = value }
         parser.on("--version VERSION") { |value| options[:version] = value }
         parser.on("--results DIR") { |value| options[:results_dir] = value }
@@ -71,9 +76,9 @@ module Bonebed
       end.parse!(arguments)
       name = arguments.shift
       raise ArgumentError, "unexpected arguments: #{arguments.join(" ")}" unless arguments.empty?
-      raise ArgumentError, "phase must be require or install" unless Dig::PHASES.include?(options[:phase])
+      raise ArgumentError, "phase must be require, install or all" unless Dig::PHASES.include?(options[:phase])
 
-      dig = Dig.new(**options.slice(:results_dir, :timeout, :offline, :quiet_target, :output_limit, :argv_limit))
+      dig = Dig.new(**options.slice(:results_dir, :timeout, :offline, :quiet_target, :output_limit, :argv_limit, :real_home, :cwd))
       if options[:gemfile]
         raise ArgumentError, "GEM cannot be combined with --gemfile" if name
         raise ArgumentError, "--require cannot be combined with --gemfile" if options[:require_path]
@@ -85,9 +90,11 @@ module Bonebed
         observation_status(success, survey.last_observer_errors, options[:strict])
       else
         warn_host
-        path = dig.run(name, phase: options[:phase], version: options[:version], require_path: options[:require_path])
-        puts path
-        summarize(path)
+        paths = Array(dig.run(name, phase: options[:phase], version: options[:version], require_path: options[:require_path], platform: options[:platform]))
+        paths.each do |path|
+          puts path
+          summarize(path)
+        end
         observation_status(dig.last_errors.empty?, dig.last_observer_errors, options[:strict])
       end
     end
@@ -111,14 +118,14 @@ module Bonebed
       end.parse!(arguments)
       raise ArgumentError, "unexpected arguments: #{arguments.join(" ")}" unless arguments.empty?
       raise ArgumentError, "choose exactly one of --top, --file, or --gemfile" unless options.values_at(:top, :file, :gemfile).compact.one?
-      raise ArgumentError, "phase must be require or install" unless Dig::PHASES.include?(options[:phase])
+      raise ArgumentError, "phase must be require, install or all" unless Dig::PHASES.include?(options[:phase])
 
       entries = if options[:top]
         Survey.top(options[:top])
       else
         options[:file] ? Survey.file(options[:file]) : Survey.lockfile(options[:gemfile])
       end
-      dig = Dig.new(**options.slice(:results_dir, :timeout, :offline, :quiet_target, :output_limit, :argv_limit))
+      dig = Dig.new(**options.slice(:results_dir, :timeout, :offline, :quiet_target, :output_limit, :argv_limit, :real_home, :cwd))
       warn_host
       survey = Survey.new(dig:, isolate: true)
       success = survey.run(entries, phase: options[:phase])
@@ -172,6 +179,8 @@ module Bonebed
     end
 
     def self.capture_options(parser, options)
+      parser.on("--real-home", "Use the real home directory") { options[:real_home] = true }
+      parser.on("--cwd DIR", "Use an explicit working directory") { |value| options[:cwd] = value }
       parser.on("--strict", "Fail on observer errors (exit 2)") { options[:strict] = true }
       parser.on("--quiet-target", "Capture target output without streaming it") { options[:quiet_target] = true }
       parser.on("--output-limit BYTES", Integer, "Capture limit per output stream (default: 1048576)") { |value| options[:output_limit] = value }

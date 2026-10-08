@@ -14,7 +14,7 @@ module Bonebed
     OUTPUT_LIMIT = 1 << 20
 
     def initialize(command, env: {}, cwd: Dir.pwd, timeout: 30, offline: false, collector: Collector.new,
-      output_limit: OUTPUT_LIMIT, argv_limit: 64, quiet_target: false, target_stdout: $stdout)
+      output_limit: OUTPUT_LIMIT, argv_limit: 64, quiet_target: false, target_stdout: $stdout, unsetenv_others: false)
       raise ArgumentError, "timeout must be positive" unless timeout.is_a?(Numeric) && timeout.positive?
       raise ArgumentError, "output limit must be nonnegative" unless output_limit.is_a?(Integer) && output_limit >= 0
       raise ArgumentError, "argv limit must be positive" unless argv_limit.is_a?(Integer) && argv_limit.positive?
@@ -23,6 +23,7 @@ module Bonebed
       @argv_limit = argv_limit
       @quiet_target = quiet_target
       @target_stdout = target_stdout
+      @unsetenv_others = unsetenv_others
       @command = command
       @env = env
       @cwd = cwd
@@ -73,7 +74,7 @@ module Bonebed
         Process.setpgrp
         IO.for_fd(1, autoclose: false).reopen(stdout)
         IO.for_fd(2, autoclose: false).reopen(stderr)
-        exec(@env, *@command, chdir: @cwd)
+        exec(@env, *@command, chdir: @cwd, unsetenv_others: @unsetenv_others)
       end
       open_syscalls.each { |syscall| supervisor.on(syscall) { |request| handle_open(request, syscall) } }
       supervisor.on(:connect) { |request| handle_connect(request) }

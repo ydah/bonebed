@@ -1,245 +1,151 @@
 # frozen_string_literal: true
 
-require "fileutils"
 require "json"
 require "rbconfig"
 require "rubygems/package"
-require "rubygems/resolver"
 require "rubygems/stub_specification"
-require "tmpdir"
 require "bundler"
+require "securerandom"
+require "time"
 require_relative "baseline"
-require_relative "difference"
-require_relative "path_normalizer"
-require_relative "session"
+require_relative "prefetcher"
+require_relative "gem_environment"
+require_relative "manifest_builder"
+require_relative "result_store"
+require_relative "phase/install"
+require_relative "phase/require"
 
 module Bonebed
   class Dig
-    PHASES = %w[require install].freeze
-    ROUTINE_RUBYGEMS_PREFIXES = %w[$HOME/.cache/gem/ $HOME/.local/share/gem/].freeze
+    PHASES = %w[require install all].freeze
     attr_reader :results_dir, :last_errors, :last_observer_errors
 
     def initialize(results_dir: "results", timeout: nil, offline: false, baseline: Baseline.new,
-      output_limit: Session::OUTPUT_LIMIT, argv_limit: 64, quiet_target: false)
+      output_limit: Session::OUTPUT_LIMIT, argv_limit: 64, quiet_target: false,
+      prefetcher: Prefetcher.new, real_home: false, cwd: nil)
       raise ArgumentError, "timeout must be positive" if timeout && !(timeout.is_a?(Numeric) && timeout.positive?)
-
       raise ArgumentError, "output limit must be nonnegative" unless output_limit.is_a?(Integer) && output_limit >= 0
       raise ArgumentError, "argv limit must be positive" unless argv_limit.is_a?(Integer) && argv_limit.positive?
 
-      @session_options = {output_limit:, argv_limit:, quiet_target:, target_stdout: $stderr}
+      @session_options = {output_limit:, argv_limit:, quiet_target:, target_stdout: $stderr, offline:}
       @results_dir = results_dir
+      @store = ResultStore.new(results_dir)
       @timeout = timeout
       @offline = offline
       @baseline = baseline
+      @prefetcher = prefetcher
+      @environment_options = {real_home:, cwd:}
       @last_errors = []
       @last_observer_errors = []
     end
 
-    def run(name, phase: "require", version: nil, require_path: nil)
+    def run(name, phase: "require", version: nil, require_path: nil, platform: nil)
       validate!(name, phase, version, require_path:)
-      manifest = Bundler.with_unbundled_env do
+      @last_errors = []
+      @last_observer_errors = []
+      @run = {"id" => SecureRandom.uuid, "started_at" => Time.now.utc.iso8601,
+              "mode" => {"offline" => @offline, "honeypot" => true}}
+      paths = Bundler.with_unbundled_env do
         Bundler.reset!
         Gem::Specification.reset
-        baseline = @baseline.capture
-        (phase == "install") ? install(name, version, baseline) : require_gem(name, version, require_path, baseline)
+        GemEnvironment.open(**@environment_options) do |environment|
+          if phase == "require"
+            specification = Gem::Specification.find_by_name(name, version ? "=#{version}" : Gem::Requirement.default)
+            specifications = environment.copy_gems(specification)
+            [observe_require(environment, specification, specifications, require_path)]
+          else
+            packages = @prefetcher.call(name, version, platform:)
+            packages = packages.map do |source|
+              destination = File.join(environment.prefetch, File.basename(source))
+              FileUtils.copy_file(source, destination)
+              destination
+            end
+            specifications = packages.map { |path| Gem::Package.new(path).spec }
+            specification = specifications.find { |spec| spec.name == name }
+            raise Error, "resolved packages do not include #{name}" unless specification
+
+            package = packages.fetch(specifications.index(specification))
+            baseline = @baseline.capture(phase: "install")
+            collector = Phase::Install.call(environment, packages, **session_options("install"))
+            manifest = build(environment, specification, "install", collector.snapshot(environment.normalizer), baseline, specifications:, package:)
+            output = [save(manifest)]
+            if phase == "all" && manifest.fetch("errors").empty?
+              specification.loaded_from = File.join(environment.gem_home, "specifications", "#{specification.full_name}.gemspec")
+              output << observe_require(environment, specification, specifications, require_path, package:)
+            end
+            output
+          end
+        end
       end
-      @last_errors = manifest.fetch("errors")
-      @last_observer_errors = manifest.fetch("observer_errors")
-      FileUtils.mkdir_p(@results_dir)
-      path = File.join(@results_dir, "#{name}-#{safe_component(manifest.dig("gem", "version"))}-#{phase}.json")
-      File.write(path, "#{JSON.pretty_generate(manifest)}\n")
-      path
+      (phase == "all") ? paths : paths.first
+    rescue Prefetcher::Error => error
+      @last_errors = [error.message]
+      path = write_failure(name, phase: (phase == "all") ? "install" : phase, version: version || "unknown", error:)
+      (phase == "all") ? [path] : path
     end
 
     def write_failure(name, phase:, version:, error:)
       validate!(name, phase)
-      FileUtils.mkdir_p(@results_dir)
-      path = File.join(@results_dir, "#{name}-#{safe_component(version)}-#{phase}.json")
-      data = manifest(name, version, phase, empty_observation(error), Baseline::Result.new(id: nil, observation: empty_observation))
-      File.write(path, "#{JSON.pretty_generate(data)}\n")
-      path
+      observation = empty_observation(error)
+      data = ManifestBuilder.call(name, version, phase, observation, Baseline::Result.new(id: nil, observation: empty_observation), run: @run)
+      data["failure_reason"] = error.is_a?(Prefetcher::Error) ? "prefetch_failed" : "setup_failed"
+      @store.write(data)
     end
 
-    def result_exists?(name, phase:, version: nil, require_path: nil)
+    def result_exists?(name, phase:, version: nil, require_path: nil, platform: nil)
       validate!(name, phase, version, require_path:)
-      suffix = version ? safe_component(version) : "*"
-      Dir[File.join(@results_dir, "#{name}-#{suffix}-#{phase}.json")].any? do |path|
-        manifest = JSON.parse(File.read(path))
-        next false unless manifest.is_a?(Hash) && manifest["gem"].is_a?(Hash) && manifest["errors"].is_a?(Array)
-
-        manifest.dig("gem", "name") == name &&
-          manifest.fetch("errors", []).empty? &&
-          (!require_path || manifest.dig("gem", "require_path") == require_path)
-      rescue JSON::ParserError
-        false
-      end
+      phases = (phase == "all") ? %w[install require] : [phase]
+      phases.all? { |entry| @store.exists?(name, phase: entry, version:, require_path: (entry == "install") ? nil : require_path, platform:) }
     end
 
     private
 
     def validate!(name, phase, version = nil, require_path: nil)
-      raise ArgumentError, "invalid gem name" unless valid_gem_name?(name)
-      raise ArgumentError, "phase must be require or install" unless PHASES.include?(phase)
+      raise ArgumentError, "invalid gem name" unless name.is_a?(String) && name.match?(Gem::Specification::VALID_NAME_PATTERN) && name.match?(/[a-zA-Z]/) && !name.start_with?(".", "-", "_")
+      raise ArgumentError, "phase must be require, install or all" unless PHASES.include?(phase)
       raise ArgumentError, "invalid gem version" if version && !Gem::Version.correct?(version)
       raise ArgumentError, "require path must not be empty" if require_path == ""
-      raise ArgumentError, "require path only applies to require phase" if require_path && phase != "require"
+      raise ArgumentError, "require path only applies to require or all phase" if require_path && phase == "install"
     end
 
-    def valid_gem_name?(name)
-      name.is_a?(String) &&
-        name.match?(Gem::Specification::VALID_NAME_PATTERN) &&
-        name.match?(/[a-zA-Z]/) &&
-        !name.start_with?(".", "-", "_")
+    def session_options(phase)
+      @session_options.merge(timeout: @timeout || ((phase == "install") ? 600 : 60))
     end
 
-    def require_gem(name, version, require_path, baseline)
-      specification = Gem::Specification.find_by_name(name, version ? "=#{version}" : Gem::Requirement.default)
-      require_path ||= inferred_require_path(specification)
-      unless require_path
-        executables = specification.executables.join(", ")
-        detail = executables.empty? ? "" : "; executables: #{executables}"
-        error = Gem::LoadError.new("#{specification.full_name} has no requirable entrypoint#{detail}; use --require PATH if needed")
-        return manifest(name, specification.version.to_s, "require", empty_observation(error), baseline,
-          platform: specification.platform.to_s)
+    def observe_require(environment, specification, specifications, require_path, package: nil)
+      baseline = @baseline.capture(phase: "require")
+      begin
+        collector, require_path = Phase::Require.call(environment, specification, require_path:, **session_options("require"))
+        observation = collector.snapshot(environment.normalizer)
+      rescue Gem::LoadError => error
+        observation = empty_observation(error)
       end
+      save(build(environment, specification, "require", observation, baseline, specifications:, package:, require_path:))
+    end
 
-      Dir.mktmpdir("bonebed-require-") do |root|
-        gem_home = File.join(root, "gems")
-        isolate_runtime_gems(specification, gem_home)
-        env = {"GEM_HOME" => gem_home, "GEM_PATH" => gem_home}
-        code = 'gem ARGV[0], "=" + ARGV[1]; require ARGV[2]'
-        collector = Session.new([RbConfig.ruby, "-e", code, name, specification.version.to_s, require_path],
-          env:, timeout: @timeout || 60, offline: @offline, **@session_options).run
-        normalizer = PathNormalizer.new(gem_paths: [gem_home, *Gem.path], tmpdir: root)
-        manifest(name, specification.version.to_s, "require", collector.snapshot(normalizer), baseline,
-          platform: specification.platform.to_s, require_path:)
+    def build(environment, specification, phase, observation, baseline, **options)
+      data = ManifestBuilder.call(specification.name, specification.version.to_s, phase, observation, baseline,
+        platform: specification.platform.to_s, run: @run, **options)
+      data["failure_reason"] = if observation.dig(:target, :timed_out)
+        "timeout"
+      elsif observation.dig(:target, :signal)
+        "signal"
+      elsif !observation.fetch(:errors).empty?
+        (phase == "install") ? "build_failed" : "require_failed"
       end
+      environment.honeypot ? environment.honeypot.redact(data) : data
     end
 
-    def inferred_require_path(specification)
-      paths = [specification.name, specification.name.tr("-", "/")]
-      paths.find do |path|
-        specification.contains_requirable_file?(path)
-      end || matching_top_level_file(specification)
-    end
-
-    def matching_top_level_file(specification)
-      normalized_name = specification.name.delete("-_")
-      paths = specification.full_require_paths.flat_map do |root|
-        Dir[File.join(root, "*.{rb,#{RbConfig::CONFIG.fetch("DLEXT")}}")].map { |file| File.basename(file, ".*") }
-      end.uniq
-      paths.find { |path| path.delete("-_") == normalized_name } || (paths.first if paths.one?)
-    end
-
-    def isolate_runtime_gems(specification, gem_home)
-      dependency = Gem::Dependency.new(specification.name, "=#{specification.version}")
-      specifications = Gem::Resolver.for_current_gems([dependency]).resolve.map(&:spec).uniq(&:full_name)
-      FileUtils.mkdir_p([File.join(gem_home, "gems"), File.join(gem_home, "specifications")])
-      specifications.each do |resolved|
-        FileUtils.ln_s(resolved.full_gem_path, File.join(gem_home, "gems", resolved.full_name))
-        FileUtils.ln_s(resolved.loaded_from, File.join(gem_home, "specifications", File.basename(resolved.loaded_from)))
-        link_extension(resolved, gem_home)
-      end
-    end
-
-    def link_extension(specification, gem_home)
-      extension_dir = specification.extension_dir
-      prefix = "#{specification.base_dir}/"
-      return unless Dir.exist?(extension_dir) && extension_dir.start_with?(prefix)
-
-      destination = File.join(gem_home, extension_dir.delete_prefix(prefix))
-      FileUtils.mkdir_p(File.dirname(destination))
-      FileUtils.ln_s(extension_dir, destination)
-    end
-
-    def install(name, version, baseline)
-      Dir.mktmpdir("bonebed-install-") do |root|
-        gem_home = File.join(root, "gems")
-        home = File.join(root, "home")
-        FileUtils.mkdir_p(home)
-        requested = version ? "#{name}:#{version}" : name
-        command = [RbConfig.ruby, "-S", "gem", "install", requested, "--no-document", "--install-dir", gem_home]
-        env = {"GEM_HOME" => gem_home, "GEM_PATH" => gem_home, "HOME" => home}
-        collector = Session.new(command, env:, timeout: @timeout || 600, offline: @offline, **@session_options).run
-        gems = installed_gems(gem_home)
-        installed = gems.find { |gem| gem.fetch("name") == name }
-        cached = cached_gem(gem_home, name)
-        normalizer = PathNormalizer.new(home:, gem_paths: [gem_home, *Gem.path], tmpdir: root)
-        manifest(name, installed&.fetch("version") || cached&.version&.to_s || version || "unknown", "install",
-          collector.snapshot(normalizer), baseline,
-          platform: installed&.fetch("platform") || cached&.platform&.to_s, installed_gems: gems)
-      end
-    end
-
-    def cached_gem(gem_home, name)
-      Dir[File.join(gem_home, "cache", "*.gem")].filter_map do |path|
-        specification = Gem::Package.new(path).spec
-        specification if specification.name == name
-      rescue Gem::Package::Error
-        nil
-      end.max_by(&:version)
-    end
-
-    def installed_gems(gem_home)
-      specifications = File.join(gem_home, "specifications")
-      Dir[File.join(specifications, "*.gemspec")].filter_map do |path|
-        specification = Gem::StubSpecification.gemspec_stub(path, gem_home, File.join(gem_home, "gems"))
-        next unless specification.valid?
-
-        {"name" => specification.name, "version" => specification.version.to_s, "platform" => specification.platform.to_s}
-      end.sort_by { |gem| gem.values_at("name", "version", "platform") }
-    end
-
-    def manifest(name, version, phase, observation, baseline, platform: nil, require_path: nil, installed_gems: nil)
-      observation = Difference.call(observation, baseline.observation)
-      files = observation.fetch(:files).transform_values { |entries| entries.keys.sort }
-      files[:notable] = (files[:read].grep(/\A(?:\$HOME|\$PWD)\//) + files[:write].grep(/\A(?:\$HOME|\$PWD|\$TMPDIR)\//)).uniq.sort
-        .reject { |path| ROUTINE_RUBYGEMS_PREFIXES.any? { |prefix| path.start_with?(prefix) } }
-      gem = {"name" => name, "version" => version}
-      gem["platform"] = platform if platform
-      gem["require_path"] = require_path if require_path
-      data = {
-        "schema_version" => 1,
-        "tool" => {"name" => "bonebed", "version" => VERSION, "seccomp_notify" => Gem.loaded_specs["seccomp-notify"]&.version&.to_s},
-        "started_at" => observation[:started_at],
-        "target" => stringify_keys(observation.fetch(:target, {exit_status: nil, signal: nil, timed_out: false})),
-        "observer_errors" => observation.fetch(:observer_errors, []),
-        "stdout_truncated" => observation.fetch(:stdout_truncated, false),
-        "stderr_truncated" => observation.fetch(:stderr_truncated, false),
-        "gem" => gem,
-        "phase" => phase,
-        "environment" => {"ruby" => RUBY_VERSION, "arch" => RbConfig::CONFIG.fetch("host_cpu"), "kernel" => `uname -r`.strip, "baseline_id" => baseline.id},
-        "files" => stringify_keys(files),
-        "network" => counted_entries(observation.fetch(:network)),
-        "exec" => counted_entries(observation.fetch(:exec)),
-        "threads" => counted_entries(observation.fetch(:threads)),
-        "stats" => stringify_keys(observation.fetch(:stats)),
-        "errors" => observation.fetch(:errors),
-        "stdout" => observation.fetch(:stdout, ""),
-        "stderr" => observation.fetch(:stderr, "")
-      }
-      data["installed_gems"] = installed_gems if installed_gems
-      data
-    end
-
-    def counted_entries(entries)
-      entries.map { |event, count| stringify_keys(event).merge("count" => count) }.sort_by(&:to_s)
-    end
-
-    def stringify_keys(hash)
-      hash.to_h { |key, value| [key.to_s, value] }
+    def save(manifest)
+      @last_errors.concat(manifest.fetch("errors"))
+      @last_observer_errors.concat(manifest.fetch("observer_errors"))
+      @store.write(manifest)
     end
 
     def empty_observation(error = nil)
-      {
-        files: {read: {}, write: {}}, network: {}, exec: {}, threads: {},
-        stats: {openat_total: 0, notify_roundtrips: 0, wall_ms: 0},
-        errors: error ? ["#{error.class}: #{error.message}"] : [], stdout: "", stderr: ""
-      }
-    end
-
-    def safe_component(value)
-      value.to_s.gsub(/[^0-9A-Za-z._-]/, "_")
+      {files: {read: {}, write: {}}, network: {}, exec: {}, threads: {},
+       stats: {openat_total: 0, notify_roundtrips: 0, wall_ms: 0},
+       errors: error ? ["#{error.class}: #{error.message}"] : [], observer_errors: [], stdout: "", stderr: ""}
     end
   end
 end

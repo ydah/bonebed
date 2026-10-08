@@ -1,6 +1,31 @@
 # frozen_string_literal: true
 
 RSpec.describe Bonebed::Report do
+  it "reads nested v2 results, deduplicates migrated v1 files, and renders capabilities" do
+    Dir.mktmpdir do |directory|
+      manifest = {schema_version: 1, gem: {name: "demo", version: "1.0"}, phase: "require", errors: [],
+                  files: {read: ["$HOME/.demo"], write: []}, network: [{family: "inet", addr: "127.0.0.1", port: 443}],
+                  exec: [], threads: [], stats: {openat_after_baseline: 7}}
+      File.write(File.join(directory, "demo.json"), JSON.generate(manifest))
+      Bonebed::ResultStore.new(directory).migrate
+      report = described_class.new(directory).markdown
+
+      expect(report).to include("Manifests: 1", "## Capabilities", "| Net | DNS | Exec | Process | Home | PWD | Native | Thread | Plugin |",
+        "`demo 1.0 (require)` | ✓", "`$HOME/.demo` | 1", "`demo 1.0 (require)` | 7")
+    end
+  end
+
+  it "escapes target-controlled HTML and Markdown in tables" do
+    Dir.mktmpdir do |directory|
+      manifest = {gem: {name: "demo", version: "1"}, phase: "require", errors: [], files: {read: [], write: []},
+                  network: [], exec: [{path: "/tmp/`|<script>alert(1)</script>", count: 1}], stats: {}, stdout: "<img src=x onerror=alert(1)>"}
+      File.write(File.join(directory, "demo.json"), JSON.generate(manifest))
+      report = described_class.new(directory).markdown
+      expect(report).not_to include("<script>", "<img")
+      expect(report).to include("&lt;script&gt;", "&#96;\\|")
+    end
+  end
+
   it "summarizes network, notable files, commands, and open counts as Markdown" do
     Dir.mktmpdir do |directory|
       manifest = {

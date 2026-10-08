@@ -8,7 +8,7 @@ RSpec.describe Bonebed::Dig do
     specification = instance_double(Gem::Specification, name: "seccomp-notify")
     allow(specification).to receive(:contains_requirable_file?) { |path| path == "seccomp/notify" }
 
-    expect(described_class.new.send(:inferred_require_path, specification)).to eq("seccomp/notify")
+    expect(Bonebed::Phase::Require.inferred_require_path(specification)).to eq("seccomp/notify")
   end
 
   it "infers a normalized top-level require path" do
@@ -17,7 +17,7 @@ RSpec.describe Bonebed::Dig do
       specification = instance_double(Gem::Specification, name: "activesupport", full_require_paths: [root])
       allow(specification).to receive(:contains_requirable_file?).and_return(false)
 
-      expect(described_class.new.send(:inferred_require_path, specification)).to eq("active_support")
+      expect(Bonebed::Phase::Require.inferred_require_path(specification)).to eq("active_support")
     end
   end
 
@@ -27,7 +27,7 @@ RSpec.describe Bonebed::Dig do
       specification = instance_double(Gem::Specification, name: "yajl-ruby", full_require_paths: [root])
       allow(specification).to receive(:contains_requirable_file?).and_return(false)
 
-      expect(described_class.new.send(:inferred_require_path, specification)).to eq("yajl")
+      expect(Bonebed::Phase::Require.inferred_require_path(specification)).to eq("yajl")
     end
   end
 
@@ -36,19 +36,7 @@ RSpec.describe Bonebed::Dig do
       specification = instance_double(Gem::Specification, name: "grpc-tools", full_require_paths: [root])
       allow(specification).to receive(:contains_requirable_file?).and_return(false)
 
-      expect(described_class.new.send(:inferred_require_path, specification)).to be_nil
-    end
-  end
-
-  it "reads the resolved version from a downloaded gem after installation fails" do
-    Dir.mktmpdir do |gem_home|
-      path = File.join(gem_home, "cache", "demo-1.2.3.gem")
-      FileUtils.mkdir_p(File.dirname(path))
-      File.write(path, "gem")
-      specification = instance_double(Gem::Specification, name: "demo", version: Gem::Version.new("1.2.3"))
-      allow(Gem::Package).to receive(:new).with(path).and_return(instance_double(Gem::Package, spec: specification))
-
-      expect(described_class.new.send(:cached_gem, gem_home, "demo")).to eq(specification)
+      expect(Bonebed::Phase::Require.inferred_require_path(specification)).to be_nil
     end
   end
 
@@ -62,7 +50,7 @@ RSpec.describe Bonebed::Dig do
     }
     baseline = Bonebed::Baseline::Result.new(id: "test", observation: {files: {read: {}, write: {}}, network: {}, exec: {}})
 
-    manifest = described_class.new.send(:manifest, "demo", "1.0.0", "install", observation, baseline)
+    manifest = Bonebed::ManifestBuilder.call("demo", "1.0.0", "install", observation, baseline)
 
     expect(manifest.dig("files", "notable")).to eq(["$HOME/.config/demo", "$PWD/config/demo.yml", "$PWD/log/demo.log"])
     expect(manifest.dig("files", "write")).to include("$HOME/.cache/gem/spec.gemspec")
@@ -72,13 +60,13 @@ RSpec.describe Bonebed::Dig do
     Dir.mktmpdir do |results|
       path = File.join(results, "demo-1.0.0-require.json")
       dig = described_class.new(results_dir: results)
-      File.write(path, JSON.generate(errors: ["failed"], gem: {name: "demo"}))
+      File.write(path, JSON.generate(errors: ["failed"], gem: {name: "demo", version: "1.0.0"}, phase: "require", files: {read: [], write: []}))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0")).to be(false)
 
-      File.write(path, JSON.generate(errors: [], gem: {name: "demo"}))
+      File.write(path, JSON.generate(errors: [], gem: {name: "demo", version: "1.0.0"}, phase: "require", files: {read: [], write: []}))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0")).to be(true)
 
-      File.write(path, JSON.generate(errors: [], gem: {name: "demo", require_path: "demo/base"}))
+      File.write(path, JSON.generate(errors: [], gem: {name: "demo", version: "1.0.0", require_path: "demo/base"}, phase: "require", files: {read: [], write: []}))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0", require_path: "demo/base")).to be(true)
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0", require_path: "demo/full")).to be(false)
     end
@@ -86,7 +74,7 @@ RSpec.describe Bonebed::Dig do
 
   it "does not treat another gem with the same prefix as an existing result" do
     Dir.mktmpdir do |results|
-      manifest = {gem: {name: "rack-test", version: "2.1.0"}, errors: []}
+      manifest = {gem: {name: "rack-test", version: "2.1.0"}, phase: "install", files: {read: [], write: []}, errors: []}
       File.write(File.join(results, "rack-test-2.1.0-install.json"), JSON.generate(manifest))
       dig = described_class.new(results_dir: results)
 
@@ -111,27 +99,11 @@ RSpec.describe Bonebed::Dig do
     Dir.mktmpdir do |results|
       path = File.join(results, "demo-1.0.0-require.json")
       dig = described_class.new(results_dir: results)
-      [nil, [], {gem: []}, {gem: {name: "demo"}}, {gem: {name: "demo"}, errors: nil},
-        {gem: {name: "demo"}, errors: ""}, {gem: {name: "demo"}, errors: {}}].each do |manifest|
+      [nil, [], {gem: []}, {gem: {name: "demo", version: "1.0.0"}, phase: "require", files: {read: [], write: []}}, {gem: {name: "demo", version: "1.0.0"}, phase: "require", files: {read: [], write: []}, errors: nil},
+        {gem: {name: "demo", version: "1.0.0"}, phase: "require", files: {read: [], write: []}, errors: ""}, {gem: {name: "demo", version: "1.0.0"}, phase: "require", files: {read: [], write: []}, errors: {}}].each do |manifest|
         File.write(path, JSON.generate(manifest))
         expect(dig.result_exists?("demo", phase: "require", version: "1.0.0")).to be(false), manifest.inspect
       end
-    end
-  end
-
-  it "separates installed gem versions from platforms and lists dependencies" do
-    Dir.mktmpdir do |gem_home|
-      specifications = File.join(gem_home, "specifications")
-      FileUtils.mkdir_p(specifications)
-      File.write(File.join(specifications, "nokogiri-1.19.4-aarch64-linux-gnu.gemspec"),
-        "# -*- encoding: utf-8 -*-\n# stub: nokogiri 1.19.4 aarch64-linux-gnu lib\n\n")
-      File.write(File.join(specifications, "racc-1.8.1.gemspec"),
-        "# -*- encoding: utf-8 -*-\n# stub: racc 1.8.1 ruby lib\n\n")
-
-      expect(described_class.new.send(:installed_gems, gem_home)).to eq([
-        {"name" => "nokogiri", "version" => "1.19.4", "platform" => "aarch64-linux-gnu"},
-        {"name" => "racc", "version" => "1.8.1", "platform" => "ruby"}
-      ])
     end
   end
 

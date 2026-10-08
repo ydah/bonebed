@@ -7,3 +7,8 @@ require "standard/rake"
 RSpec::Core::RakeTask.new(:spec)
 
 task default: %i[spec standard]
+
+desc "Measure syscall observation overhead on Linux"
+task :bench do
+  ruby "-Ilib", "script/bench.rb"
+end
