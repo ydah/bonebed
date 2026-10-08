@@ -16,16 +16,15 @@ module Bonebed
         }
       end
 
-      def resolve(path, request, syscall, cwd)
+      def resolve(path, request, syscall, cwd, dirfd: nil)
         return path if path.start_with?(File::SEPARATOR)
 
-        dirfd = signed(request.args.fetch(0)) unless syscall == :open
+        dirfd = signed(dirfd || request.args.fetch(0)) unless syscall == :open
         link = (dirfd.nil? || dirfd == AT_FDCWD) ? "cwd" : "fd/#{dirfd}"
         File.expand_path(path, File.readlink("/proc/#{request.pid}/#{link}"))
       rescue SystemCallError
         (link == "cwd" && cwd) ? File.expand_path(path, cwd) : path
       end
-      private_class_method :resolve
 
       def signed(value)
         value &= (1 << 32) - 1

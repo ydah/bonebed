@@ -47,7 +47,22 @@ RSpec.describe "execution metadata and limits" do
   it "validates limits before starting a target" do
     expect { Bonebed::Session.new(["false"], output_limit: -1) }.to raise_error(ArgumentError)
     expect { Bonebed::Session.new(["false"], argv_limit: 0) }.to raise_error(ArgumentError)
+    expect { Bonebed::Session.new(["false"], resource_limits: {FSIZE: -1}) }.to raise_error(ArgumentError)
     expect { Bonebed::Dig.new(timeout: 0) }.to raise_error(ArgumentError)
+  end
+
+  it "applies hard file and descriptor limits only in the target" do
+    skip "Linux seccomp is required" unless RUBY_PLATFORM.include?("linux")
+    parent_limit = Process.getrlimit(:NOFILE)
+    Dir.mktmpdir do |directory|
+      code = '$stdout.sync = true; puts Process.getrlimit(:NOFILE).join(":"); File.write("large", "x" * 8192)'
+      result = Bonebed::Session.new([RbConfig.ruby, "-e", code], cwd: directory, quiet_target: true,
+        resource_limits: {NOFILE: 64, FSIZE: 1024}).run.snapshot(Bonebed::PathNormalizer.new(cwd: directory))
+      expect(result[:stdout]).to eq("64:64\n")
+      expect(result[:errors]).not_to be_empty
+      expect(File.size(File.join(directory, "large"))).to be <= 1024
+      expect(Process.getrlimit(:NOFILE)).to eq(parent_limit)
+    end
   end
 
   it "does not wait beyond the deadline for an escaped child holding output pipes" do

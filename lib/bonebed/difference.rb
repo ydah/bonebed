@@ -8,7 +8,8 @@ module Bonebed
       files = observed.fetch(:files).to_h do |mode, entries|
         [mode, subtract(entries, baseline.dig(:files, mode) || {})]
       end
-      observed.merge(
+      events = Collector::EVENT_GROUPS.to_h { |group| [group, subtract(observed.fetch(group, {}), baseline.fetch(group, {}))] }
+      observed.merge(events).merge(
         files:,
         network: subtract(observed.fetch(:network), baseline.fetch(:network, {})),
         exec: subtract(observed.fetch(:exec), baseline.fetch(:exec, {})),

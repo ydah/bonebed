@@ -18,15 +18,25 @@ module Bonebed
       observation = Difference.call(observation, baseline.observation)
       files = observation.fetch(:files).transform_values { |entries| entries.keys.sort }
       reads = files.fetch(:read)
-      files[:notable] = (reads.grep(/\A(?:\$HOME|\$PWD)\//) + files[:write].grep(/\A(?:\$HOME|\$PWD|\$TMPDIR)\//)).uniq.sort
-        .reject { |path| ROUTINE_RUBYGEMS_PREFIXES.any? { |prefix| path.start_with?(prefix) } }
       own = "$GEM_HOME/gems/#{name}-#{version}#{"-#{platform}" if platform && platform != "ruby"}/"
       files[:read] = {self: reads.select { |path| path.start_with?(own) }, resolver: reads & RESOLVER_PATHS,
                      other: reads.reject { |path| path.start_with?(own) || RESOLVER_PATHS.include?(path) }}
+      observation.fetch(:changes, {}).each do |event, count|
+        operation = event.fetch(:operation).to_sym
+        if operation == :write
+          files[:write] |= [event.fetch(:path)]
+        else
+          (files[operation] ||= []) << event.except(:operation).merge(count:)
+        end
+      end
+      files[:notable] = (reads.grep(/\A(?:\$HOME|\$PWD)\//) + files[:write].grep(/\A(?:\$HOME|\$PWD|\$TMPDIR)\//)).uniq.sort
+        .reject { |path| ROUTINE_RUBYGEMS_PREFIXES.any? { |prefix| path.start_with?(prefix) } }
       specification = specifications.find { |spec| spec.name == name }
       gem = {"name" => name, "version" => version, "platform" => platform, "require_path" => require_path,
              "sha256" => package && Digest::SHA256.file(package).hexdigest,
              "extensions" => specification&.extensions || [], "executables" => specification&.executables || [],
+             "required_ruby_version" => specification&.required_ruby_version&.to_s,
+             "post_install_message" => specification&.post_install_message,
              "rubygems_plugin" => !!specification&.files&.any? { |file| File.basename(file) == "rubygems_plugin.rb" }}
       stats = observation.fetch(:stats).transform_keys(&:to_s)
       stats["open_total"] = stats.delete("openat_total")
@@ -46,6 +56,12 @@ module Bonebed
         "canary_hits" => [], "findings" => []
       }
       data = JSON.parse(JSON.generate(data))
+      data["process_tree"] = observation.fetch(:process_tree, [])
+      data["run"]["mode"]["isolation"] = observation[:isolation] if data["run"] && observation[:isolation]
+      %i[processes listen suspicious dns anti_analysis].each do |group|
+        data[group.to_s] = counted(observation.fetch(group, {}))
+      end
+      data["anti_analysis"] |= reads.grep(%r{\A/proc/(?:self|<pid>)/(?:status|maps|environ)\z}).map { |path| {"path" => path} }
       data["capabilities"] = capabilities(data)
       data
     end

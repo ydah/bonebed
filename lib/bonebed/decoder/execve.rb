@@ -11,7 +11,7 @@ module Bonebed
       def call(request, limit: 64)
         raise ArgumentError, "argv limit must be positive" unless limit.is_a?(Integer) && limit.positive?
 
-        argv, truncated = read_argv(request, request.args.fetch(1), limit:)
+        argv, truncated = read_arguments(request, request.args.fetch(1), limit:)
         event = {
           path: request.read_string(request.args.fetch(0)),
           argv:
@@ -20,7 +20,7 @@ module Bonebed
         event
       end
 
-      def read_argv(request, address, limit:)
+      def read_arguments(request, address, limit:)
         arguments = []
         (limit + 1).times do |index|
           pointer = request.read(address + (index * POINTER_SIZE), POINTER_SIZE).unpack1(POINTER_FORMAT)
@@ -30,7 +30,6 @@ module Bonebed
           arguments << request.read_string(pointer)
         end
       end
-      private_class_method :read_argv
     end
   end
 end

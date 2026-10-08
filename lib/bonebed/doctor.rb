@@ -2,6 +2,7 @@
 
 require "rbconfig"
 require "bundler"
+require_relative "isolation"
 
 module Bonebed
   class Doctor
@@ -31,6 +32,7 @@ module Bonebed
         ["container seccomp profile", container_status, true]
       ]
       checks.each { |name, value, ok| @output.puts(format("%-30s %-24s %s", name, value, ok ? "OK" : "NG")) }
+      isolation = Isolation.features
       {
         "Ruby" => RUBY_VERSION,
         "RubyGems" => Gem::VERSION,
@@ -38,6 +40,9 @@ module Bonebed
         "user namespaces (max)" => read_setting("/proc/sys/user/max_user_namespaces"),
         "AppArmor userns restriction" => read_setting("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"),
         "cgroup v2" => enabled(File.exist?("/sys/fs/cgroup/cgroup.controllers")),
+        "cgroup writable" => enabled(isolation[:cgroup_writable]),
+        "Landlock ABI" => isolation[:landlock_abi] || isolation[:landlock_error],
+        "network namespace" => isolation[:network_namespace] ? "available (unshare)" : isolation[:network_namespace_error],
         "container (heuristic)" => self.class.container? ? "detected" : "not detected"
       }.each { |name, value| @output.puts(format("%-30s %s", name, value)) }
       checks.first(6).all?(&:last)

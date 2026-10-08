@@ -37,6 +37,6 @@ RSpec.describe Bonebed::Doctor do
     allow(doctor).to receive(:arch).and_return("x86_64")
     allow(doctor).to receive(:seccomp_features).and_return(user_notif: true, continue: true, addfd: true)
     expect(doctor.run).to be(true)
-    expect(output.string).to include("Ruby", "RubyGems", "Bundler", "user namespaces", "AppArmor userns restriction", "cgroup v2", "container (heuristic)")
+    expect(output.string).to include("Ruby", "RubyGems", "Bundler", "user namespaces", "AppArmor userns restriction", "cgroup v2", "container (heuristic)", "Landlock ABI", "network namespace", "cgroup writable")
   end
 end
