@@ -1,0 +1,42 @@
+- id: credential-read
+  severity: critical
+  match:
+    - file:read:$HOME/.ssh/**
+    - file:read:$HOME/.aws/**
+    - file:read:$HOME/.gem/credentials
+    - file:read:$HOME/.netrc
+    - file:read:$HOME/.config/gh/**
+    - file:read:$HOME/.docker/config.json
+    - file:read:$HOME/.kube/config
+    - file:read:$PWD/.env*
+    - file:read:$PWD/config/master.key
+  message: Credential file access
+- id: install-network
+  severity: high
+  phase: [install]
+  match: ["network:**"]
+  message: Network access during installation
+- id: git-hook-write
+  severity: critical
+  match: ["file:write:$PWD/.git/hooks/**"]
+  message: Git hook modification
+- id: fileless-exec
+  severity: critical
+  match: ["syscall:memfd_create", "syscall:execveat"]
+  message: Memory-backed or descriptor-based execution
+- id: external-command
+  severity: medium
+  match: ["exec:**"]
+  message: External command execution
+- id: threads-spawned
+  severity: info
+  match: ["thread:spawn"]
+  message: Thread creation
+- id: raw-socket
+  severity: high
+  match: ["socket:*:3:*", "socket:packet:*", "socket:AF_PACKET:*"]
+  message: Raw or packet socket creation
+- id: canary-exposed
+  severity: critical
+  match: ["canary:**"]
+  message: Honeypot credential appeared in observed output or traffic
