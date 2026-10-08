@@ -2,6 +2,7 @@
 
 require "timeout"
 require_relative "collector"
+require_relative "sensitive_path"
 require_relative "decoder/openat"
 require_relative "decoder/connect"
 require_relative "decoder/execve"
@@ -89,11 +90,19 @@ module Bonebed
       @collector.record_notification
       event = Decoder::Openat.call(request, syscall:, cwd: @cwd)
       # ponytail: same-mount check drops failed read probes; retain attempts if targets gain separate mounts.
-      @collector.record_open(event) unless event[:mode] == :read && event[:path].start_with?(File::SEPARATOR) && !File.exist?(event[:path])
+      @collector.record_open(event) unless discardable_probe?(event)
     rescue StandardError => error
       @collector.record_error(syscall, error)
     ensure
       request.continue!(unsafe: true) unless request.responded?
+    end
+
+    def discardable_probe?(event)
+      path = event[:path]
+      return false unless event[:mode] == :read && path.start_with?(File::SEPARATOR)
+      return false if SensitivePath.match?(path, home: @env.fetch("HOME", Dir.home), cwd: @cwd)
+
+      !File.exist?(path)
     end
 
     def handle_connect(request)

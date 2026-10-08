@@ -56,7 +56,7 @@ RSpec.describe Bonebed::Dig do
     observation = {
       files: {
         read: {"$PWD/config/demo.yml" => 1},
-        write: {"$HOME/.cache/gem/spec.gemspec" => 1, "$HOME/.config/demo" => 1, "$PWD/log/demo.log" => 1}
+        write: {"$HOME/.cache/gem/spec.gemspec" => 1, "$HOME/.local/share/gem/specs/demo" => 1, "$HOME/.config/demo" => 1, "$PWD/log/demo.log" => 1}
       },
       network: {}, exec: {}, stats: {openat_total: 4, notify_roundtrips: 4, wall_ms: 1}, errors: [], stderr: ""
     }
@@ -72,15 +72,38 @@ RSpec.describe Bonebed::Dig do
     Dir.mktmpdir do |results|
       path = File.join(results, "demo-1.0.0-require.json")
       dig = described_class.new(results_dir: results)
-      File.write(path, JSON.generate(errors: ["failed"]))
+      File.write(path, JSON.generate(errors: ["failed"], gem: {name: "demo"}))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0")).to be(false)
 
-      File.write(path, JSON.generate(errors: []))
+      File.write(path, JSON.generate(errors: [], gem: {name: "demo"}))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0")).to be(true)
 
-      File.write(path, JSON.generate(errors: [], gem: {require_path: "demo/base"}))
+      File.write(path, JSON.generate(errors: [], gem: {name: "demo", require_path: "demo/base"}))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0", require_path: "demo/base")).to be(true)
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0", require_path: "demo/full")).to be(false)
+    end
+  end
+
+  it "does not treat another gem with the same prefix as an existing result" do
+    Dir.mktmpdir do |results|
+      manifest = {gem: {name: "rack-test", version: "2.1.0"}, errors: []}
+      File.write(File.join(results, "rack-test-2.1.0-install.json"), JSON.generate(manifest))
+      dig = described_class.new(results_dir: results)
+
+      expect(dig.result_exists?("rack", phase: "install")).to be(false)
+      expect(dig.result_exists?("rack-test", phase: "install")).to be(true)
+      File.write(File.join(results, "rack-1.0-install.json"), "{")
+      expect(dig.result_exists?("rack", phase: "install")).to be(false)
+    end
+  end
+
+  it "accepts dotted gem names and rejects invalid names" do
+    Dir.mktmpdir do |results|
+      dig = described_class.new(results_dir: results)
+      expect(dig.result_exists?("jquery.fileupload-rails", phase: "install")).to be(false)
+      ["../evil", "123", ".demo", "-demo", "_demo", "demo/evil", nil].each do |name|
+        expect { dig.result_exists?(name, phase: "install") }.to raise_error(ArgumentError, "invalid gem name")
+      end
     end
   end
 

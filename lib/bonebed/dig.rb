@@ -16,6 +16,7 @@ require_relative "session"
 module Bonebed
   class Dig
     PHASES = %w[require install].freeze
+    ROUTINE_RUBYGEMS_PREFIXES = %w[$HOME/.cache/gem/ $HOME/.local/share/gem/].freeze
     attr_reader :results_dir, :last_errors
 
     def initialize(results_dir: "results", timeout: 30, offline: false, baseline: Baseline.new(timeout:))
@@ -57,18 +58,29 @@ module Bonebed
       suffix = version ? safe_component(version) : "*"
       Dir[File.join(@results_dir, "#{name}-#{suffix}-#{phase}.json")].any? do |path|
         manifest = JSON.parse(File.read(path))
-        manifest.fetch("errors", []).empty? && (!require_path || manifest.dig("gem", "require_path") == require_path)
+        manifest.dig("gem", "name") == name &&
+          manifest.fetch("errors", []).empty? &&
+          (!require_path || manifest.dig("gem", "require_path") == require_path)
+      rescue JSON::ParserError
+        false
       end
     end
 
     private
 
     def validate!(name, phase, version = nil, require_path: nil)
-      raise ArgumentError, "gem name is required" unless name&.match?(/\A[a-zA-Z0-9_-]+\z/)
+      raise ArgumentError, "invalid gem name" unless valid_gem_name?(name)
       raise ArgumentError, "phase must be require or install" unless PHASES.include?(phase)
       raise ArgumentError, "invalid gem version" if version && !Gem::Version.correct?(version)
       raise ArgumentError, "require path must not be empty" if require_path == ""
       raise ArgumentError, "require path only applies to require phase" if require_path && phase != "require"
+    end
+
+    def valid_gem_name?(name)
+      name.is_a?(String) &&
+        name.match?(Gem::Specification::VALID_NAME_PATTERN) &&
+        name.match?(/[a-zA-Z]/) &&
+        !name.start_with?(".", "-", "_")
     end
 
     def require_gem(name, version, require_path, baseline)
@@ -173,7 +185,7 @@ module Bonebed
       observation = Difference.call(observation, baseline.observation)
       files = observation.fetch(:files).transform_values { |entries| entries.keys.sort }
       files[:notable] = (files[:read].grep(/\A(?:\$HOME|\$PWD)\//) + files[:write].grep(/\A(?:\$HOME|\$PWD|\$TMPDIR)\//)).uniq.sort
-        .reject { |path| path.start_with?("$HOME/.cache/gem/") }
+        .reject { |path| ROUTINE_RUBYGEMS_PREFIXES.any? { |prefix| path.start_with?(prefix) } }
       gem = {"name" => name, "version" => version}
       gem["platform"] = platform if platform
       gem["require_path"] = require_path if require_path

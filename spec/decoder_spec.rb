@@ -2,6 +2,13 @@
 
 RSpec.describe Bonebed::Decoder do
   describe Bonebed::Decoder::Connect do
+    it "records non-IP socket families without raising" do
+      expect(described_class.call([16, 0, 0, 0].pack("S<S<L<L<"))).to eq(family: "netlink")
+      expect(described_class.call([99, 0].pack("S<S<"))).to eq(family: "af_99")
+      expect { described_class.call("\0") }.to raise_error(ArgumentError)
+      expect { described_class.call([2].pack("S<")) }.to raise_error(ArgumentError)
+    end
+
     it "decodes Linux IPv4, IPv6, and Unix socket addresses" do
       ipv4 = [2].pack("S<") + [443].pack("n") + [127, 0, 0, 1].pack("C4") + ("\0" * 8)
       ipv6 = [10, 443, 0].pack("S<nN") + [0x2001, 0xdb8, 0, 0, 0, 0, 0, 1].pack("n8") + [0].pack("L<")

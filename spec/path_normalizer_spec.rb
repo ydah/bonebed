@@ -14,4 +14,11 @@ RSpec.describe Bonebed::PathNormalizer do
     expect(normalizer.call("relative/path")).to eq("$PWD/relative/path")
     expect(normalizer.call("\0abstract")).to eq("\0abstract")
   end
+
+  it "normalizes per-thread procfs paths" do
+    expect(normalizer.call("/proc/self/task/562/comm")).to eq("/proc/<pid>/task/<tid>/comm")
+    expect(normalizer.call("/proc/thread-self/task/562/comm")).to eq("/proc/<pid>/task/<tid>/comm")
+    expect(normalizer.call("/proc/42/task/43/stat")).to eq("/proc/<pid>/task/<tid>/stat")
+    expect(normalizer.call("/proc/42/task/43extra/stat")).to eq("/proc/<pid>/task/43extra/stat")
+  end
 end

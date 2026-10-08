@@ -19,7 +19,8 @@ module Bonebed
       return replace(path, @home, "$HOME") if inside?(path, @home)
       return path == @tmpdir ? "$TMPDIR" : "$TMPDIR/<random>" if inside?(path, @tmpdir)
 
-      path.sub(%r{\A/proc/\d+(?=/|\z)}, "/proc/<pid>")
+      path.sub(%r{\A/proc/(?:\d+|self|thread-self)/task/\d+(?=/|\z)}, "/proc/<pid>/task/<tid>")
+        .sub(%r{\A/proc/\d+(?=/|\z)}, "/proc/<pid>")
     end
 
     private
