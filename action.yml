@@ -1,0 +1,102 @@
+name: Bonebed capability changes
+description: Observe changed RubyGems dependencies in a disposable container and report their capabilities.
+author: Yudai Takada
+branding:
+  icon: search
+  color: orange
+
+inputs:
+  base-sha:
+    description: Full Git commit SHA containing the previous Gemfile.lock.
+    required: true
+  fail-on:
+    description: Minimum severity that fails the action (info, low, medium, high, critical, or none).
+    default: high
+  offline:
+    description: Block target network calls while allowing the observer to prefetch packages.
+    default: 'true'
+  results:
+    description: Dedicated results directory relative to the repository root.
+    default: bonebed-results
+
+outputs:
+  sarif:
+    description: Relative path to the SARIF report.
+    value: ${{ steps.observe.outputs.sarif }}
+  markdown:
+    description: Relative path to the Markdown capability diff.
+    value: ${{ steps.observe.outputs.markdown }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Observe changed dependencies
+      id: observe
+      shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        OFFLINE: ${{ inputs.offline }}
+        RESULTS: ${{ inputs.results }}
+        ACTION_SOURCE: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        [[ "$BASE_SHA" =~ ^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$ ]] || { echo 'base-sha must be a full hexadecimal SHA' >&2; exit 64; }
+        case "$FAIL_ON" in info|low|medium|high|critical|none) ;; *) echo 'invalid fail-on' >&2; exit 64 ;; esac
+        case "$OFFLINE" in true|false) ;; *) echo 'offline must be true or false' >&2; exit 64 ;; esac
+        [[ "$RESULTS" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/-]*$ ]] || { echo 'invalid results directory' >&2; exit 64; }
+        results_dir="$(realpath -m "$GITHUB_WORKSPACE/$RESULTS")"
+        [[ "$results_dir" == "$GITHUB_WORKSPACE/"* ]] || { echo 'results must be inside the workspace' >&2; exit 64; }
+        mkdir -p "$results_dir"
+        input_dir="$(mktemp -d "$RUNNER_TEMP/bonebed-input.XXXXXX")"
+        trap 'rm -rf -- "$input_dir"' EXIT
+        git show "$BASE_SHA:Gemfile.lock" > "$input_dir/base.lock"
+        cp -- Gemfile.lock "$input_dir/Gemfile.lock"
+        image="bonebed-action:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        docker build --tag "$image" "$ACTION_SOURCE"
+        printf 'sarif=%s/bonebed.sarif\nmarkdown=%s/diff.md\n' "$RESULTS" "$RESULTS" >> "$GITHUB_OUTPUT"
+        status=0
+        docker run --rm -i --read-only --cap-drop ALL --security-opt no-new-privileges \
+          --security-opt "seccomp=$ACTION_SOURCE/contrib/docker-seccomp.json" --pids-limit 512 --memory 2g --cpus 2 \
+          --user "$(id -u):$(id -g)" --env HOME=/tmp \
+          --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g,mode=1777 \
+          --mount "type=bind,source=$results_dir,target=/work" \
+          --mount "type=bind,source=$input_dir/base.lock,target=/work/base.lock,readonly" \
+          --mount "type=bind,source=$input_dir/Gemfile.lock,target=/work/Gemfile.lock,readonly" \
+          --entrypoint ruby "$image" -rbonebed/cli - "$FAIL_ON" "$OFFLINE" <<'RUBY' || status=$?
+        require "json"
+        require "bonebed/policy"
+        def capture(path)
+          original = $stdout
+          File.open(path, "w") do |output|
+            $stdout = output
+            yield
+          end
+        ensure
+          $stdout = original
+        end
+        threshold, offline = ARGV
+        args = ["base.lock", "Gemfile.lock", "--phase", "all", "--results", "manifests", "--format", "json"]
+        args << "--offline" if offline == "true"
+        status = capture("diff.json") { Bonebed::CLI.diff_lock(args) }
+        changes = JSON.parse(File.read("diff.json"))
+        capture("diff.md") { Bonebed::CLI.output_diff(changes, "md") }
+        versions = Bonebed::Survey.lockfile("Gemfile.lock").to_h { |entry| [entry.fetch(:name), entry.fetch(:version)] }
+        names = changes.map { |entry| entry.fetch("gem") }
+        manifests = Bonebed::ResultStore.read("manifests").select do |manifest|
+          gem = manifest.fetch("gem")
+          names.include?(gem.fetch("name")) && versions[gem.fetch("name")] == gem.fetch("version")
+        end
+        policy = Bonebed::Policy.new
+        File.write("bonebed.sarif", Bonebed::CLI.format_report(manifests, "sarif", policy: policy, lockfile: "Gemfile.lock"))
+        violation = threshold != "none" && manifests.any? { |manifest| !policy.violations(manifest, fail_on: threshold).empty? }
+        exit(status.zero? && violation ? Bonebed::CLI::EXIT_POLICY_VIOLATION : status)
+        RUBY
+        if [[ -f "$results_dir/diff.md" ]]; then
+          cat "$results_dir/diff.md" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        exit "$status"

@@ -7,12 +7,29 @@ Before 1.0, minor releases may contain breaking changes, listed explicitly below
 
 ### Breaking
 
-- Distinguish target failures and timeouts (exit 1), observation failures (exit 2 with `--strict`), and invalid usage (exit 64). Reserve exit 3 for future policy violations.
+- Write schema v2 manifests in a nested, identity-specific layout. Reads are grouped as `self`, `resolver`, and `other`; open counters drop the `openat_` prefix. Reports still read v1; v1 reading is planned for removal at 1.0.
+- Run targets in disposable home/project directories with decoy credentials and a reduced environment. Use `--real-home` or `--cwd DIR` to select real directories explicitly.
+- Distinguish target failures and timeouts (exit 1), observation failures (exit 2 with `--strict`), policy violations (exit 3), and invalid usage (exit 64).
 - Record observer failures in `observer_errors` separately from target `errors`; add target exit, signal, and timeout metadata.
 - Default to a 600-second install timeout and a 60-second require timeout. Limit stored stdout and stderr to 1 MiB each; expose truncation flags.
 
 ### Added
 
+- Observe additional open/exec/file-change syscalls, process creation, listeners, datagram destinations, bounded DNS questions, selected sensitive syscalls, and io_uring attempts.
+- Add decoded JSONL timelines, process relationships, environment profiles, write-only observations, and parallel survey workers.
+- Add repeated observations with retained samples and stable/flaky capability summaries; scope resume to complete groups and matching execution settings.
+- Observe explicit shell-free commands and declared RubyGems executables with literal arguments.
+- Add an optional Prism source scan for command, network, and eval call sites, with approximate observation matching.
+- Add capability diffs, gem/version and lockfile comparisons, history, validated YAML policy rules, capability approval locks, and JSON/HTML/CSV/SARIF output.
+- Add a production container and SHA-pinned composite Action for changed lockfile dependencies.
+- Configure multi-platform image publishing with provenance/SBOM attestations, live top-20 nightly surveys, and opt-in GitLab/Lefthook examples; add shell completions and a Japanese onboarding guide.
+- Add a `--docker` launcher with restricted mounts, a bundled seccomp profile, container resource bounds, and per-target hard resource limits.
+- Add network namespaces with explicit syscall fallback, tracked descendant cleanup, and optional Landlock filesystem/TCP enforcement.
+- Add local dataset pages, search, JSON/RSS change feeds, factual badges, CycloneDX augmentation, and watchlist monitoring with retryable atomic checkpoints.
+- Add an inactive, digest-pinned example workflow for sharded surveys and an observation review/correction guide.
+- Add package prefetching outside observation, phase-specific baselines, and `--phase all` for linked install and require observations.
+- Add package platform selection, package/dependency metadata, a capability matrix, canary detection, JSON Schema, and non-destructive `migrate` support.
+- Add manifest compatibility documentation and an explicit threat model.
 - Add version output, command-specific help, concise dig summaries, and expanded environment diagnostics.
 - Add `--strict`, `--quiet-target`, `--output-limit`, and `--argv-limit` options.
 - Report argv truncation and normalize paths in command arguments.

@@ -1,0 +1,69 @@
+# Copy into .github/workflows only after configuring the image and reviewing the gem list.
+name: Observe a curated top 1000 gem list
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bonebed-dataset
+  cancel-in-progress: false
+
+jobs:
+  survey:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    env:
+      # Set this repository variable to a reviewed image's immutable digest.
+      DATA_IMAGE: ${{ vars.BONEBED_DATA_IMAGE || 'ghcr.io/OWNER/bonebed@sha256:REPLACE_WITH_VERIFIED_DIGEST' }}
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate configuration and prepare this shard
+        shell: bash
+        run: |
+          [[ "$DATA_IMAGE" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]] || { echo 'Configure BONEBED_DATA_IMAGE with an immutable digest'; exit 1; }
+          test -f data/top1000.txt
+          awk 'NF && $1 !~ /^#/ { print $1 }' data/top1000.txt > "$RUNNER_TEMP/all-gems.txt"
+          test "$(sort -u "$RUNNER_TEMP/all-gems.txt" | wc -l)" -eq 1000
+          test "$(wc -l < "$RUNNER_TEMP/all-gems.txt")" -eq 1000
+          mkdir -p "$RUNNER_TEMP/observations"
+          awk -v shard="$SHARD" '((NR - 1) % 10) == shard' "$RUNNER_TEMP/all-gems.txt" > "$RUNNER_TEMP/observations/names.txt"
+          printf '%s\n' "$DATA_IMAGE" > "$RUNNER_TEMP/observations/image.txt"
+          docker pull "$DATA_IMAGE"
+      - name: Observe and export without repository credentials
+        shell: bash
+        run: |
+          run_image() {
+            docker run --rm --init --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --security-opt "seccomp=$GITHUB_WORKSPACE/contrib/docker-seccomp.json" --pids-limit 512 --memory 2g --cpus 2 \
+              --user "$(id -u):$(id -g)" --env HOME=/tmp \
+              --env BONEBED_BASELINE_DIR=/tmp/bonebed-baselines --env BONEBED_GEM_CACHE=/tmp/bonebed-gems \
+              --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g,mode=1777 \
+              --mount "type=bind,source=$RUNNER_TEMP/observations,target=/work" \
+              "$DATA_IMAGE" "$@"
+          }
+          status=0
+          run_image survey --file /work/names.txt --phase all --offline --quiet-target --results /work/results || status=$?
+          run_image dataset /work/results --output /work/site
+          tar -czf "$RUNNER_TEMP/bonebed-shard-$SHARD.tar.gz" -C "$RUNNER_TEMP/observations" .
+          exit "$status"
+      - name: Retain compressed observations for review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bonebed-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/bonebed-shard-${{ matrix.shard }}.tar.gz
+          if-no-files-found: warn
+          retention-days: 14

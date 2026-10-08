@@ -13,7 +13,7 @@ Measurements below were taken on 2026-09-09 in the development container: Ruby 4
 
 Relative `open`/`openat` paths are resolved through `/proc/<tid>/cwd` or the supplied directory descriptor while the issuing thread is stopped. Bonebed checks that read targets exist on the shared mount to remove failed load-path probes. Write and network events remain attempts because seccomp continuation does not return the eventual syscall result to the notifier.
 
-Both `sendmsg` and `sendmmsg` can be placed in a notification policy with version 0.3.0. The library keeps its listener-transfer descriptor available so `sendmsg` can be filtered safely. Bonebed observes `open`/`openat`, `connect`, `execve`, `clone`, and `clone3`.
+Both `sendmsg` and `sendmmsg` can be placed in a notification policy with version 0.3.0. The library keeps its listener-transfer descriptor available so `sendmsg` can be filtered safely. The current observation list is defined in `Session` and `Syscalls`; it includes file changes, UDP destinations, sockets, descriptor-based execution, and process lifetime events.
 
 An `execve` notification was continued successfully and decoded `/usr/local/bin/ruby` from its filename argument. Returning `Errno::ENETUNREACH` from a `connect` handler reached the target as expected.
 
@@ -30,6 +30,22 @@ Three wall-clock runs, in seconds:
 | 3 | 0.163 | 0.367 |
 
 Median overhead was 2.25x (0.367 / 0.163). Printing all 900 paths was disabled during timing.
+
+## Expanded observer benchmark (2026-10-08)
+
+Run `bin/dev bundle exec rake bench`, then `bin/dev env BONEBED_BENCH_WRITES_ONLY=1 bundle exec rake bench`.
+The workload starts Ruby and reads `/etc/hostname` 1,000 times. On Ruby 4.0.6, Linux 6.8.0 aarch64,
+with a 20 ms supervisor poll interval, three samples produced:
+
+| Mode | Plain milliseconds | Observed milliseconds | Per-sample ratios | Notifications |
+| --- | --- | --- | --- | ---: |
+| Full | 108, 92, 110 | 232, 204, 285 | 2.14, 2.22, 2.60 | 2,764 |
+| Writes only | 80, 85, 80 | 130, 124, 111 | 1.63, 1.47, 1.39 | 4 |
+
+The median per-sample ratios are 2.22x and 1.47x respectively. Writes-only deliberately omits read
+observations. These small samples do not establish the roadmap performance budget for other workloads,
+architectures, or native-extension builds. The earlier open-notification spike used a different workload.
+The benchmark emits JSON so CI or a release report can retain the raw samples.
 
 ## Event dates
 

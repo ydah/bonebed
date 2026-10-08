@@ -1,0 +1,10 @@
+.git
+.idea
+.bundle
+.bonebed
+tmp
+results
+coverage
+pkg
+vendor
+*.gem

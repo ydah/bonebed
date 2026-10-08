@@ -23,7 +23,12 @@ for trusted fixtures, not a boundary for running potentially hostile gems.
 Bonebed is not a security sandbox. It observes selected syscalls before they finish and cannot
 guarantee their results. Pointer arguments can change between inspection and continuation (TOCTOU).
 An empty manifest does not establish that a gem is safe, and unobserved syscall paths can perform
-additional activity. Require observations currently inherit the working directory and home environment.
+additional activity. Target execution defaults to disposable home and project directories with decoy
+credentials and a reduced environment. This does not restrict access to other files by absolute path.
+`--real-home` and `--cwd` explicitly expose the selected real directories.
 
-`--offline` rejects observed `connect` calls. It does not isolate the network or block every way to
-send traffic, including unconnected UDP. Install observations can include RubyGems download traffic.
+`--offline` attempts a user/network namespace. If unavailable, it records an observer error and falls
+back to rejecting observed connection and datagram calls. Use `--strict` to fail automation on that
+fallback. Package prefetching runs outside observation and may use the network even with `--offline`.
+Optional Landlock enforcement restricts supported filesystem and TCP operations, with limits determined
+by the kernel ABI. See [the threat model](docs/threat-model.md) for further limits.

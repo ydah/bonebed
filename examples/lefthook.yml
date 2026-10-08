@@ -1,0 +1,6 @@
+# Merge into lefthook.yml after recording and reviewing observations.
+# This reads existing manifests; it never installs or executes a target gem.
+pre-push:
+  commands:
+    observed-capabilities:
+      run: bundle exec bonebed check results --lock Gemfile.capabilities.lock --strict

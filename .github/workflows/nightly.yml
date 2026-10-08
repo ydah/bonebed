@@ -1,0 +1,55 @@
+name: Nightly observation regression
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: nightly-fixtures
+  cancel-in-progress: true
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: '4.0'
+          bundler-cache: true
+      - name: Run deterministic Linux fixture regressions
+        run: bundle exec rspec spec/integration_spec.rb spec/phases_spec.rb spec/analysis_spec.rb spec/analysis_cli_spec.rb
+
+  registry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the observation container
+        run: docker build --tag bonebed-nightly .
+      - name: Observe the current top twenty gems
+        run: |
+          mkdir results
+          docker run --rm --init --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --security-opt seccomp=contrib/docker-seccomp.json \
+            --pids-limit 512 --memory 4g --cpus 2 \
+            --user "$(id -u):$(id -g)" --env HOME=/tmp \
+            --env BONEBED_BASELINE_DIR=/tmp/baselines --env BONEBED_GEM_CACHE=/tmp/gems \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=2g,mode=1777 \
+            --mount "type=bind,source=$PWD/results,target=/results" \
+            bonebed-nightly survey --top 20 --phase all --jobs 2 --offline --quiet-target --results /results
+      - name: Preserve observations including target failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-observations
+          path: results/
+          retention-days: 30
+          if-no-files-found: error

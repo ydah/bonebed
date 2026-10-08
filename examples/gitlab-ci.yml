@@ -1,0 +1,40 @@
+# Include in .gitlab-ci.yml only on an ephemeral Linux shell runner with Docker.
+# Set BONEBED_CI_IMAGE to a reviewed image@sha256:digest; no image is published yet.
+bonebed-capabilities:
+  stage: test
+  tags: [bonebed-disposable-docker]
+  timeout: 45m
+  variables:
+    GIT_DEPTH: "0"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: [Gemfile.lock]
+  script:
+    - |
+      set -eu
+      printf '%s' "$BONEBED_CI_IMAGE" | grep -Eq '^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$'
+      mkdir -p bonebed-input bonebed-results
+      git show "${CI_MERGE_REQUEST_DIFF_BASE_SHA}:Gemfile.lock" > bonebed-input/base.lock
+      cp Gemfile.lock bonebed-input/head.lock
+      run_bonebed() {
+        docker run --rm --init --read-only --cap-drop ALL \
+          --security-opt no-new-privileges \
+          --security-opt "seccomp=$CI_PROJECT_DIR/contrib/docker-seccomp.json" \
+          --pids-limit 512 --memory 2g --cpus 2 \
+          --user "$(id -u):$(id -g)" --env HOME=/tmp \
+          --env BONEBED_BASELINE_DIR=/tmp/baselines --env BONEBED_GEM_CACHE=/tmp/gems \
+          --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g,mode=1777 \
+          --mount "type=bind,source=$CI_PROJECT_DIR/bonebed-input,target=/input,readonly" \
+          --mount "type=bind,source=$CI_PROJECT_DIR/bonebed-results,target=/results" \
+          "$BONEBED_CI_IMAGE" "$@"
+      }
+      status=0
+      run_bonebed diff-lock /input/base.lock /input/head.lock --results /results --offline --format json > bonebed-results/diff.json || status=$?
+      if [ "$status" -eq 0 ]; then
+        run_bonebed check /results --fail-on high --strict --format md > bonebed-results/check.md || status=$?
+      fi
+      exit "$status"
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths: [bonebed-results/]
