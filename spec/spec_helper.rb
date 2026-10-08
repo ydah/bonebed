@@ -3,6 +3,8 @@
 require "simplecov"
 SimpleCov.start do
   add_filter "/spec/"
+  track_files "lib/**/*.rb"
+  minimum_coverage Float(ENV.fetch("BONEBED_COVERAGE_MIN")) if ENV["BONEBED_COVERAGE_MIN"]
 end
 
 require "bonebed"

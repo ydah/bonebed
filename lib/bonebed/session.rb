@@ -82,7 +82,7 @@ module Bonebed
         @collector.record_observer_error(:subreaper, error)
       end
       if @trace_path
-        @trace_io = File.open(@trace_path, "a", 0o600)
+        @trace_io = File.open(@trace_path, File::WRONLY | File::CREAT | File::APPEND | File::NOFOLLOW, 0o600)
         @trace_io.sync = true
         @trace_normalizer = PathNormalizer.new(home: @env.fetch("HOME", Dir.home), cwd: @cwd,
           tmpdir: @env.fetch("TMPDIR", Dir.tmpdir), gem_paths: [@env["GEM_HOME"], *@env["GEM_PATH"]&.split(File::PATH_SEPARATOR), *Gem.path].compact)
@@ -138,10 +138,10 @@ module Bonebed
         else
           notify(*open_syscalls)
         end
-        notify(:openat2, :connect, :execve, :execveat, :bind, :listen, :setsid, :exit, :exit_group,
+        notify(:openat2, :socket, :connect, :execve, :execveat, :bind, :listen, :setsid, :exit, :exit_group,
           *process_syscalls, *Syscalls.file_changes, *Syscalls::DATAGRAMS, *Syscalls::SUSPICIOUS)
       end
-      supervisor = Seccomp::Notify.spawn(policy) do
+      supervisor = Seccomp::Notify.spawn(policy, poll_interval: 0.02) do
         Process.setpgrp
         IO.for_fd(1, autoclose: false).reopen(stdout)
         IO.for_fd(2, autoclose: false).reopen(stderr)
@@ -167,6 +167,15 @@ module Bonebed
       end
       open_syscalls.each { |syscall| on(supervisor, syscall) { |request| handle_open(request, syscall) } }
       on(supervisor, :connect) { |request| handle_connect(request) }
+      on(supervisor, :socket) do |request|
+        observe(request, :socket) do
+          family, type, protocol = request.args.first(3)
+          name = {1 => "unix", 2 => "inet", 10 => "inet6"}.merge(Decoder::Connect::FAMILY_NAMES).fetch(family, "af_#{family}")
+          event = {family: name, type: type & 0xf, protocol:}
+          @collector.record(:sockets, event)
+          trace_fields(request, event)
+        end
+      end
       on(supervisor, :openat2) { |request| handle_openat2(request) }
       on(supervisor, :execve) { |request| handle_execve(request) }
       on(supervisor, :execveat) { |request| handle_execveat(request) }
@@ -219,6 +228,9 @@ module Bonebed
       event = event.to_h do |key, value|
         value = @trace_normalizer.call(value) if %i[path from to parent].include?(key) && value.is_a?(String) && !(key == :from && event[:symbolic])
         value = value.map { |argument| @trace_normalizer.scrub(argument) } if key == :argv
+        if key == :messages
+          value = value.map { |message| message[:path] ? message.merge(path: @trace_normalizer.call(message[:path])) : message }
+        end
         [key, value]
       end
       row = metadata.merge(t: Process.clock_gettime(Process::CLOCK_MONOTONIC) - @started_at, syscall: syscall.to_s).merge(event)
@@ -320,6 +332,7 @@ module Bonebed
       trace_fields(request, event)
       # ponytail: same-mount check drops failed read probes; retain attempts if targets gain separate mounts.
       @collector.record_open(event) unless discardable_probe?(event)
+      record_write_kinds(event[:path], request.args.fetch((syscall == :open) ? 1 : 2))
     rescue => error
       @collector.record_observer_error(syscall, error)
     ensure
@@ -334,6 +347,12 @@ module Bonebed
       !File.exist?(path)
     end
 
+    def record_write_kinds(path, flags)
+      {create: File::CREAT, truncate: File::TRUNC, append: File::APPEND, rw: File::RDWR}.each do |operation, flag|
+        @collector.record(:changes, {operation:, path:}) if (flags & flag).positive?
+      end
+    end
+
     def handle_connect(request)
       @collector.record_notification
       raise ArgumentError, "invalid sockaddr length" unless (2..Decoder::Connect::MAX_LENGTH).cover?(request.args.fetch(2))
@@ -341,9 +360,12 @@ module Bonebed
       bytes = request.read(request.args.fetch(1), request.args.fetch(2))
       event = Decoder::Connect.call(bytes)
       trace_fields(request, event || {})
+      identity = socket_identity(request, request.args.fetch(0))
       if event
         @collector.record_network(event)
-        @endpoints[[process_id(request), request.args.fetch(0)]] = event
+        @endpoints[identity] = event if identity
+      elsif identity
+        @endpoints.delete(identity)
       end
     rescue => error
       @collector.record_observer_error(:connect, error)
@@ -387,6 +409,13 @@ module Bonebed
       task_info(request).fetch(:tgid)
     end
 
+    def socket_identity(request, fd)
+      value = File.readlink("/proc/#{request.pid}/fd/#{fd}")
+      value if value.start_with?("socket:[")
+    rescue SystemCallError
+      nil
+    end
+
     def observe(request, syscall)
       @collector.record_notification
       yield
@@ -414,6 +443,7 @@ module Bonebed
         event = {path:, mode: write ? :write : :read}
         trace_fields(request, event)
         @collector.record_open(event) if (!@writes_only || write) && !discardable_probe?(event)
+        record_write_kinds(path, flags)
       end
     end
 
@@ -444,14 +474,15 @@ module Bonebed
 
         event = Decoder::Connect.call(request.read(request.args.fetch(1), request.args.fetch(2)))
         trace_fields(request, event || {})
-        @bindings[[process_id(request), request.args.fetch(0)]] = event if event
+        identity = socket_identity(request, request.args.fetch(0))
+        @bindings[identity] = event if event && identity
         @collector.record(:listen, event.merge(syscall: "bind")) if event
       end
     end
 
     def handle_listen(request)
       observe(request, :listen) do
-        event = @bindings[[process_id(request), request.args.fetch(0)]] || {family: "unknown"}
+        event = @bindings[socket_identity(request, request.args.fetch(0))] || {family: "unknown"}
         trace_fields(request, event)
         @collector.record(:listen, event.merge(syscall: "listen"))
       end
@@ -461,7 +492,7 @@ module Bonebed
       @collector.record_notification
       messages = []
       Decoder::Datagram.call(request, syscall:).each do |message|
-        event = message[:destination] || @endpoints[[process_id(request), message[:fd]]]
+        event = message[:destination] || @endpoints[socket_identity(request, message[:fd])]
         next unless event
 
         @collector.record_network(event)

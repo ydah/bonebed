@@ -13,7 +13,7 @@ RSpec.describe Bonebed::CLI do
   end
 
   it "prints command-specific help without running commands" do
-    %w[doctor baseline dig survey report].each do |command|
+    %w[doctor baseline dig survey report migrate policy dataset monitor run static bundle].each do |command|
       expect { expect(described_class.start([command, "--help"])).to eq(0) }.to output(/Usage: bonebed #{command}/).to_stdout
     end
   end
@@ -54,6 +54,14 @@ RSpec.describe Bonebed::CLI do
     it "forwards capture limits and lets Dig choose the phase timeout" do
       expect(Bonebed::Dig).to receive(:new).with(hash_including(timeout: nil, quiet_target: true, output_limit: 128, argv_limit: 4)).and_return(dig)
       expect { described_class.start(%w[dig demo --quiet-target --output-limit 128 --argv-limit 4]) }.to output.to_stdout.and output.to_stderr
+    end
+
+    it "forwards repeat counts and executable arguments without parsing target flags" do
+      expect(Bonebed::Dig).to receive(:new).with(hash_including(repeat: 2)).and_return(dig)
+      expect(dig).to receive(:run).with("demo", hash_including(phase: "exec", executable: "demo-tool", arguments: ["--version"]))
+        .and_return(@manifest_path)
+      expect { described_class.start(%w[dig demo --phase exec --executable demo-tool --repeat 2 -- --version]) }
+        .to output.to_stdout.and output.to_stderr
     end
 
     it "summarizes nonempty observations as counts" do

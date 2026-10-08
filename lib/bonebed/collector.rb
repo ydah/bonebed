@@ -2,7 +2,7 @@
 
 module Bonebed
   class Collector
-    EVENT_GROUPS = %i[changes processes listen suspicious dns anti_analysis].freeze
+    EVENT_GROUPS = %i[changes processes listen sockets suspicious dns anti_analysis].freeze
     attr_reader :errors, :observer_errors, :wall_ms, :status
 
     def initialize

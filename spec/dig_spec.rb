@@ -63,10 +63,10 @@ RSpec.describe Bonebed::Dig do
       File.write(path, JSON.generate(errors: ["failed"], gem: {name: "demo", version: "1.0.0"}, phase: "require", files: {read: [], write: []}))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0")).to be(false)
 
-      File.write(path, JSON.generate(errors: [], gem: {name: "demo", version: "1.0.0"}, phase: "require", files: {read: [], write: []}))
+      File.write(path, JSON.generate(errors: [], run: {mode: dig.observation_mode}, gem: {name: "demo", version: "1.0.0"}, phase: "require", files: {read: [], write: []}))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0")).to be(true)
 
-      File.write(path, JSON.generate(errors: [], gem: {name: "demo", version: "1.0.0", require_path: "demo/base"}, phase: "require", files: {read: [], write: []}))
+      File.write(path, JSON.generate(errors: [], run: {mode: dig.observation_mode}, gem: {name: "demo", version: "1.0.0", require_path: "demo/base"}, phase: "require", files: {read: [], write: []}))
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0", require_path: "demo/base")).to be(true)
       expect(dig.result_exists?("demo", phase: "require", version: "1.0.0", require_path: "demo/full")).to be(false)
     end
@@ -74,7 +74,7 @@ RSpec.describe Bonebed::Dig do
 
   it "does not treat another gem with the same prefix as an existing result" do
     Dir.mktmpdir do |results|
-      manifest = {gem: {name: "rack-test", version: "2.1.0"}, phase: "install", files: {read: [], write: []}, errors: []}
+      manifest = {gem: {name: "rack-test", version: "2.1.0"}, phase: "install", files: {read: [], write: []}, errors: [], run: {mode: described_class.new.observation_mode}}
       File.write(File.join(results, "rack-test-2.1.0-install.json"), JSON.generate(manifest))
       dig = described_class.new(results_dir: results)
 
@@ -92,6 +92,98 @@ RSpec.describe Bonebed::Dig do
       ["../evil", "123", ".demo", "-demo", "_demo", "demo/evil", nil].each do |name|
         expect { dig.result_exists?(name, phase: "install") }.to raise_error(ArgumentError, "invalid gem name")
       end
+    end
+  end
+
+  it "resumes only observations with the same requested mode and policy contents" do
+    Dir.mktmpdir do |results|
+      policy = File.join(results, "policy.yml")
+      File.write(policy, "{}\n")
+      dig = described_class.new(results_dir: results, enforce: policy)
+      manifest = {gem: {name: "demo", version: "1"}, phase: "require", files: {read: [], write: []}, errors: [], run: {mode: dig.observation_mode}}
+      File.write(File.join(results, "result.json"), JSON.generate(manifest))
+      expect(dig.result_exists?("demo", phase: "require")).to be(true)
+      [{enforce: nil}, {offline: true}, {env_profile: "ci"}, {writes_only: true}, {real_home: true}, {cwd: results}].each do |options|
+        expect(described_class.new(results_dir: results, enforce: policy, **options).result_exists?("demo", phase: "require")).to be(false)
+      end
+      File.write(policy, "read_paths: []\n")
+      expect(dig.result_exists?("demo", phase: "require")).to be(false)
+    end
+  end
+
+  it "requires all phases of the same version, including a discovered plugin, before resuming all" do
+    Dir.mktmpdir do |results|
+      dig = described_class.new(results_dir: results)
+      manifest = {gem: {name: "demo", version: "1", rubygems_plugin: true}, files: {read: [], write: []}, errors: [], run: {mode: dig.observation_mode}}
+      %w[install require].each { |phase| File.write(File.join(results, "#{phase}.json"), JSON.generate(manifest.merge(phase: phase))) }
+      expect(dig.result_exists?("demo", phase: "all")).to be(false)
+      File.write(File.join(results, "plugin.json"), JSON.generate(manifest.merge(phase: "plugin")))
+      expect(dig.result_exists?("demo", phase: "all")).to be(true)
+      File.write(File.join(results, "require.json"), JSON.generate(manifest.merge(phase: "require", gem: {name: "demo", version: "2"})))
+      expect(dig.result_exists?("demo", phase: "all")).to be(false)
+    end
+  end
+
+  it "gives every gem, version, run and phase a distinct trace filename" do
+    dig = described_class.new(trace: "/tmp/trace")
+    first = Gem::Specification.new do |spec|
+      spec.name = "demo"
+      spec.version = "1"
+    end
+    second = Gem::Specification.new do |spec|
+      spec.name = "other"
+      spec.version = "2"
+    end
+    dig.instance_variable_set(:@run, {"id" => "first-run"})
+    paths = [dig.send(:session_options, "require", first).fetch(:trace), dig.send(:session_options, "require", second).fetch(:trace), dig.send(:session_options, "install", first).fetch(:trace)]
+    dig.instance_variable_set(:@run, {"id" => "second-run"})
+    paths << dig.send(:session_options, "require", first).fetch(:trace)
+    expect(paths.uniq.size).to eq(4)
+    expect(paths.first).to include("demo", "1", "first-run", "require")
+  end
+
+  it "repeats in fresh environments, retains every sample and classifies stable and flaky capabilities" do
+    Dir.mktmpdir do |root|
+      specification = Gem::Specification.new do |spec|
+        spec.name = "demo"
+        spec.version = "1"
+      end
+      allow(Gem::Specification).to receive(:find_by_name).with("demo", anything).and_return(specification)
+      homes = []
+      allow_any_instance_of(Bonebed::GemEnvironment).to receive(:copy_gems).with(specification).and_return([specification])
+      probe = described_class.new
+      baseline = Bonebed::Baseline::Result.new(id: "test", observation: probe.send(:empty_observation))
+      allow(Bonebed::Phase::Require).to receive(:call) do |environment, _spec, **_options|
+        homes << environment.home
+        observation = probe.send(:empty_observation)
+        observation[:files][:write]["$PWD/stable"] = 1
+        observation[:files][:write]["$PWD/flaky"] = 1 if homes.size == 1
+        observation[:errors] = ["second sample failed"] if homes.size == 5
+        [double("collector", snapshot: observation), "demo"]
+      end
+      dig = described_class.new(results_dir: root, repeat: 3, baseline: double("baseline", capture: baseline))
+      paths = dig.run("demo")
+      manifests = paths.map { |path| JSON.parse(File.read(path)) }
+      expect(paths.uniq.size).to eq(3)
+      expect(homes.uniq.size).to eq(3)
+      expect(manifests.map { |manifest| manifest.dig("run", "repeat", "index") }).to eq([1, 2, 3])
+      expect(manifests.map { |manifest| manifest.dig("run", "repeat", "group") }.uniq.size).to eq(1)
+      expect(manifests.map { |manifest| manifest.fetch("stability") }).to all(eq("samples" => 3, "complete" => true, "stable" => ["file:write:$PWD/stable"], "flaky" => ["file:write:$PWD/flaky"]))
+      expect(dig.result_exists?("demo", phase: "require")).to be(true)
+      expect(Gem::Specification).to have_received(:find_by_name).with("demo", "=1").twice
+      File.unlink(paths.first)
+      expect(dig.result_exists?("demo", phase: "require")).to be(false)
+      failed = dig.run("demo").map { |path| JSON.parse(File.read(path)) }
+      expect(dig.last_errors).to eq(["second sample failed"])
+      expect(failed.map { |manifest| manifest.dig("stability", "complete") }).to eq([false, false, false])
+      expect(dig.result_exists?("demo", phase: "require")).to be(false)
+      expect(Bonebed::ResultStore.read(root).size).to eq(5)
+    end
+  end
+
+  it "rejects invalid repetition counts" do
+    [0, -1, 101, 1.5, "2"].each do |repeat|
+      expect { described_class.new(repeat:) }.to raise_error(ArgumentError, /repeat/)
     end
   end
 
@@ -126,12 +218,14 @@ RSpec.describe Bonebed::Dig do
       Gem::Specification.reset
       probe = described_class.new
       baseline = Bonebed::Baseline::Result.new(id: "test", observation: probe.send(:empty_observation))
-      dig = described_class.new(results_dir: File.join(gem_home, "results"), baseline: instance_double(Bonebed::Baseline, capture: baseline))
+      dig = described_class.new(results_dir: File.join(gem_home, "results"), repeat: 2, baseline: instance_double(Bonebed::Baseline, capture: baseline))
 
-      path = dig.run("bonebed-isolated", phase: "require", version: "1.0.0", require_path: "bonebed-isolated")
-      manifest = JSON.parse(File.read(path))
+      paths = dig.run("bonebed-isolated", phase: "require", version: "1.0.0", require_path: "bonebed-isolated")
+      manifests = paths.map { |path| JSON.parse(File.read(path)) }
 
-      expect(manifest.fetch("errors")).to be_empty
+      expect(paths.size).to eq(2)
+      expect(manifests.map { |manifest| manifest.fetch("errors") }).to all(be_empty)
+      expect(manifests.map { |manifest| manifest.dig("stability", "complete") }).to eq([true, true])
     end
   ensure
     ENV["GEM_HOME"], ENV["GEM_PATH"] = original_env

@@ -94,6 +94,51 @@
                     "boolean",
                     "null"
                   ]
+                },
+                "isolation": {
+                  "type": "string"
+                },
+                "enforce": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "repeat": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "real_home": {
+                  "type": "boolean"
+                },
+                "cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "repeat": {
+              "type": "object",
+              "required": [
+                "group",
+                "index",
+                "count"
+              ],
+              "properties": {
+                "group": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
                 }
               }
             }
@@ -157,6 +202,18 @@
         "rubygems_plugin": {
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "required_ruby_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "post_install_message": {
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -476,6 +533,94 @@
               }
             ]
           }
+        },
+        "create": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "count"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "length": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "truncate": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "count"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "length": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "append": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "count"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "length": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "rw": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "count"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "length": {
+                "type": "integer"
+              }
+            }
+          }
         }
       },
       "required": [
@@ -764,6 +909,114 @@
             "type": "integer",
             "minimum": 1
           }
+        }
+      }
+    },
+    "command": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "sockets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "family",
+          "type",
+          "protocol",
+          "count"
+        ],
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "type": {
+            "type": "integer"
+          },
+          "protocol": {
+            "type": "integer"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "process_tree": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "pid",
+          "ppid",
+          "path"
+        ],
+        "properties": {
+          "pid": {
+            "type": "integer"
+          },
+          "ppid": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "stability": {
+      "type": "object",
+      "required": [
+        "samples",
+        "complete",
+        "stable",
+        "flaky"
+      ],
+      "properties": {
+        "samples": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "stable": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "flaky": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "properties": {
+        "gemfile_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "lockfile_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     }

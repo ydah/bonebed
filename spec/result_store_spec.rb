@@ -92,4 +92,58 @@ RSpec.describe Bonebed::ResultStore do
       expect(Dir.children(directory)).to be_empty
     end
   end
+
+  it "keeps requested observation modes separate while ignoring runtime isolation details" do
+    Dir.mktmpdir do |directory|
+      store = described_class.new(directory)
+      manifest = described_class.upgrade(legacy_manifest)
+      mode = {"offline" => false, "honeypot" => true, "env_profile" => "dev", "writes_only" => false}
+      modes = [mode, mode.merge("offline" => true), mode.merge("env_profile" => "ci"),
+        mode.merge("writes_only" => true), mode.merge("honeypot" => false), mode.merge("enforce" => "policy-a")]
+      paths = modes.map { |entry| store.write(manifest.merge("run" => {"mode" => entry})) }
+      expect(paths.uniq.size).to eq(modes.size)
+      expect(described_class.read(directory).size).to eq(modes.size)
+      expect(store.exists?("rack", phase: "require", mode: mode.merge("enforce" => "policy-b"))).to be(false)
+      expect(store.exists?("rack", phase: "require", mode: mode)).to be(true)
+      expect(store.write(manifest.merge("run" => {"mode" => mode.merge("isolation" => "namespace")}))).to eq(paths.first)
+    end
+  end
+
+  it "keeps distinct command argument lists separate" do
+    Dir.mktmpdir do |directory|
+      store = described_class.new(directory)
+      manifest = described_class.upgrade(legacy_manifest).merge("phase" => "exec")
+      first = store.write(manifest.merge("command" => ["ruby", "first.rb"]))
+      second = store.write(manifest.merge("command" => ["ruby", "second.rb"]))
+      expect(first).not_to eq(second)
+      expect(described_class.read(directory).size).to eq(2)
+    end
+  end
+
+  it "rejects malformed mode and command metadata without hiding valid legacy results" do
+    Dir.mktmpdir do |directory|
+      manifest = legacy_manifest
+      [{"run" => []}, {"run" => {"mode" => []}}, {"run" => {"mode" => {"offline" => "false"}}},
+        {"run" => {"repeat" => false}}, {"run" => {"arguments" => "not argv"}},
+        {"gem" => manifest.fetch("gem").merge("platform" => false)}, {"command" => "ruby"}].each do |extra|
+        expect(described_class.valid?(manifest.merge(extra))).to be(false)
+      end
+      File.write(File.join(directory, "legacy.json"), JSON.generate(manifest))
+      store = described_class.new(directory)
+      expect(store.exists?("rack", phase: "require")).to be(true)
+      expect(store.exists?("rack", phase: "require", mode: {"offline" => false})).to be(false)
+    end
+  end
+
+  it "prefers a freshly written result over an older v2 filename with the same identity" do
+    Dir.mktmpdir do |directory|
+      store = described_class.new(directory)
+      manifest = described_class.upgrade(legacy_manifest)
+      old = File.join(directory, "old-layout.json")
+      File.write(old, JSON.generate(manifest.merge("stdout" => "old")))
+      File.utime(Time.at(0), Time.at(0), old)
+      store.write(manifest.merge("stdout" => "new"))
+      expect(described_class.read(directory).map { |result| result.fetch("stdout") }).to eq(["new"])
+    end
+  end
 end

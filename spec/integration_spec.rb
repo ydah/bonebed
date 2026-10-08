@@ -141,7 +141,7 @@ RSpec.describe "fixture manifests" do
     {
       "files" => {"read" => reads, "write" => writes, "notable" => (reads + writes).uniq.sort},
       "network" => observation[:network].keys.map { |event| event.transform_keys(&:to_s) }.sort_by(&:to_s),
-      "exec" => observation[:exec].keys.map { |event| event.transform_keys(&:to_s) }.sort_by(&:to_s)
+      "exec" => observation[:exec].keys.map { |event| event.slice(:path, :argv).transform_keys(&:to_s) }.sort_by(&:to_s)
     }
   end
 end

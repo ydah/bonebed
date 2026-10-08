@@ -9,6 +9,7 @@ require_relative "sensitive_path"
 module Bonebed
   class ResultStore
     COMPONENT = /\A[0-9A-Za-z][0-9A-Za-z._-]*\z/
+    MODE_KEYS = %w[offline honeypot env_profile writes_only real_home cwd enforce repeat].freeze
 
     def initialize(directory)
       @directory = directory
@@ -30,16 +31,31 @@ module Bonebed
       path
     end
 
-    def exists?(name, phase:, version: nil, require_path: nil, platform: nil)
-      self.class.read(@directory).any? do |manifest|
+    def exists?(name, **options)
+      !matching(name, **options).empty?
+    end
+
+    def matching(name, phase:, version: nil, require_path: nil, platform: nil, mode: nil, executable: nil, arguments: nil)
+      matches = self.class.read(@directory).select do |manifest|
         gem = manifest.fetch("gem")
         gem["name"] == name && manifest["phase"] == phase &&
           (!version || gem["version"] == version.to_s) && (!platform || gem["platform"] == platform.to_s) &&
           (!require_path || phase == "install" || gem["require_path"] == require_path) &&
+          (!mode || self.class.mode_identity(manifest.dig("run", "mode")) == self.class.mode_identity(mode)) &&
+          (!executable || manifest.dig("run", "executable") == executable) &&
+          (!arguments || manifest.dig("run", "arguments") == arguments) &&
           manifest.fetch("errors").empty? &&
           !manifest.dig("target", "timed_out") && !manifest.dig("target", "signal") &&
           [nil, 0].include?(manifest.dig("target", "exit_status"))
       end
+      count = mode && mode.transform_keys(&:to_s)["repeat"]
+      return matches unless count && count > 1
+
+      matches.select { |manifest| manifest.dig("run", "repeat") }.group_by { |manifest| [manifest.fetch("gem").values_at("version", "platform", "require_path"), manifest.dig("run", "repeat", "group")] }
+        .values.select do |samples|
+          samples.map { |sample| sample.dig("run", "repeat", "index") }.sort == (1..count).to_a &&
+            samples.all? { |sample| sample.dig("run", "repeat", "count") == count && sample["stability"].is_a?(Hash) && sample["stability"]["complete"] == true }
+        end.flatten(1)
     end
 
     def migrate
@@ -54,9 +70,23 @@ module Bonebed
     end
 
     def self.read(directory)
-      paths(directory).filter_map { |path| load(path) }
-        .group_by { |manifest| [manifest["phase"], *manifest.fetch("gem").values_at("name", "version", "platform", "require_path")] }
-        .values.map { |versions| versions.max_by { |manifest| manifest.fetch("schema_version", 1) } }
+      paths(directory).filter_map do |path|
+        manifest = load(path)
+        [manifest, File.mtime(path)] if manifest
+      rescue SystemCallError
+        nil
+      end.group_by { |manifest, _mtime| identity(manifest) }
+        .values.map { |versions| versions.max_by { |manifest, mtime| [manifest.fetch("schema_version", 1), mtime] }.first }
+    end
+
+    def self.mode_identity(mode)
+      {"repeat" => 1}.merge((mode || {}).transform_keys(&:to_s)).values_at(*MODE_KEYS)
+    end
+
+    def self.identity(manifest)
+      [manifest["phase"], *manifest.fetch("gem").values_at("name", "version", "platform", "require_path"),
+        mode_identity(manifest.dig("run", "mode")), manifest["command"], manifest.dig("run", "repeat")&.values_at("group", "index"),
+        manifest.dig("run", "executable"), manifest.dig("run", "arguments"), manifest["bundle"]]
     end
 
     def self.paths(directory)
@@ -76,10 +106,12 @@ module Bonebed
       gem = manifest["gem"]
       return false unless gem.is_a?(Hash)
       return false unless %w[name version].all? { |key| gem[key].is_a?(String) && COMPONENT.match?(gem[key]) }
-      return false unless gem["platform"].nil? || (gem["platform"].is_a?(String) && COMPONENT.match?(gem["platform"]))
+      return false if !gem["platform"].nil? && !(gem["platform"].is_a?(String) && COMPONENT.match?(gem["platform"]))
       return false unless gem["require_path"].nil? || gem["require_path"].is_a?(String)
       return false unless %w[install require plugin exec].include?(manifest["phase"])
       return false unless manifest["errors"].is_a?(Array) && manifest["errors"].all? { |error| error.is_a?(String) }
+      return false unless valid_run?(manifest["run"])
+      return false if manifest.key?("command") && !(manifest["command"].is_a?(Array) && !manifest["command"].empty? && manifest["command"].all? { |arg| arg.is_a?(String) })
 
       files = manifest["files"]
       return false unless files.is_a?(Hash) && files["write"].is_a?(Array)
@@ -96,6 +128,28 @@ module Bonebed
         %w[stdout stderr].all? { |key| !manifest.key?(key) || manifest[key].is_a?(String) } &&
         (manifest["observer_errors"].nil? || (manifest["observer_errors"].is_a?(Array) && manifest["observer_errors"].all? { |error| error.is_a?(String) }))
     end
+
+    def self.valid_run?(run)
+      return true if run.nil?
+      return false unless run.is_a?(Hash)
+      return false if !run["executable"].nil? && !(run["executable"].is_a?(String) && COMPONENT.match?(run["executable"]))
+      return false if !run["arguments"].nil? && !(run["arguments"].is_a?(Array) && run["arguments"].all? { |argument| argument.is_a?(String) && !argument.include?("\0") })
+      unless run["repeat"].nil?
+        repetition = run["repeat"]
+        return false unless repetition.is_a?(Hash) && repetition["group"].is_a?(String) &&
+          repetition["count"].is_a?(Integer) && (2..100).cover?(repetition["count"]) &&
+          repetition["index"].is_a?(Integer) && (1..repetition["count"]).cover?(repetition["index"])
+      end
+
+      mode = run["mode"]
+      return true if mode.nil?
+      return false unless mode.is_a?(Hash)
+
+      %w[offline honeypot writes_only real_home].all? { |key| [nil, true, false].include?(mode[key]) } &&
+        %w[env_profile cwd enforce].all? { |key| mode[key].nil? || mode[key].is_a?(String) } &&
+        (!mode.key?("repeat") || (mode["repeat"].is_a?(Integer) && (1..100).cover?(mode["repeat"])))
+    end
+    private_class_method :valid_run?
 
     def self.valid_event?(kind, entry)
       return false unless entry.is_a?(Hash)
@@ -160,7 +214,7 @@ module Bonebed
 
     def path_for(manifest)
       gem = manifest.fetch("gem")
-      suffix = Digest::SHA256.hexdigest(JSON.generate(gem.values_at("version", "platform", "require_path")))
+      suffix = Digest::SHA256.hexdigest(JSON.generate(self.class.identity(manifest)))
       filename = "#{gem.fetch("version")}-#{gem["platform"] || "unknown"}+#{suffix}.json"
       File.join(@directory, manifest.fetch("phase"), gem.fetch("name"), filename)
     end

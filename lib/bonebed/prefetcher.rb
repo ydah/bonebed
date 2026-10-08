@@ -14,7 +14,7 @@ module Bonebed
     PLATFORM_LOCK = Mutex.new
     private_constant :PLATFORM_LOCK
 
-    def initialize(directory: File.join(".bonebed", "gems"))
+    def initialize(directory: ENV.fetch("BONEBED_GEM_CACHE", File.join(".bonebed", "gems")))
       @directory = File.expand_path(directory)
     end
 

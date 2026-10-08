@@ -61,6 +61,29 @@ RSpec.describe "session trace and process lifetime" do
     end
   end
 
+  it "normalizes datagram paths and redacts canaries before writing trace rows" do
+    Bonebed::GemEnvironment.open do |environment|
+      trace = File.join(environment.root, "trace.jsonl")
+      code = <<~RUBY
+        require "socket"
+        require "rbconfig"
+        receiver = Socket.new(Socket::AF_UNIX, Socket::SOCK_DGRAM, 0)
+        address = Socket.sockaddr_un(File.expand_path("receiver"))
+        receiver.bind(address)
+        Socket.new(Socket::AF_UNIX, Socket::SOCK_DGRAM, 0).send("fixture", 0, address)
+        system(RbConfig.ruby, "-e", "", ENV.fetch("GITHUB_TOKEN")) or abort "child failed"
+      RUBY
+      result = Bonebed::Session.new([RbConfig.ruby, "-e", code], env: environment.env, cwd: environment.project,
+        quiet_target: true, unsetenv_others: true, trace:, redactor: environment.honeypot).run
+      expect(result.errors).to be_empty
+      text = File.read(trace)
+      expect(text).not_to include(environment.env.fetch("GITHUB_TOKEN"))
+      expect(text).to include("[CANARY:env:GITHUB_TOKEN]")
+      rows = text.lines.map { |line| JSON.parse(line) }
+      expect(rows).to include(include("messages" => include(include("path" => "$PWD/receiver"))))
+    end
+  end
+
   it "fails closed before executing the target when requested enforcement is unavailable" do
     allow(Bonebed::Landlock).to receive(:restrict!).and_raise(Bonebed::Landlock::Unavailable, "fixture enforcement unavailable")
     collector = Bonebed::Session.new([RbConfig.ruby, "-e", 'puts "target executed"'], quiet_target: true,

@@ -23,9 +23,8 @@ module Bonebed
                      other: reads.reject { |path| path.start_with?(own) || RESOLVER_PATHS.include?(path) }}
       observation.fetch(:changes, {}).each do |event, count|
         operation = event.fetch(:operation).to_sym
-        if operation == :write
-          files[:write] |= [event.fetch(:path)]
-        else
+        files[:write] |= [event.fetch(:path)] if %i[write create truncate append rw].include?(operation)
+        unless operation == :write
           (files[operation] ||= []) << event.except(:operation).merge(count:)
         end
       end
@@ -58,7 +57,7 @@ module Bonebed
       data = JSON.parse(JSON.generate(data))
       data["process_tree"] = observation.fetch(:process_tree, [])
       data["run"]["mode"]["isolation"] = observation[:isolation] if data["run"] && observation[:isolation]
-      %i[processes listen suspicious dns anti_analysis].each do |group|
+      %i[processes listen sockets suspicious dns anti_analysis].each do |group|
         data[group.to_s] = counted(observation.fetch(group, {}))
       end
       data["anti_analysis"] |= reads.grep(%r{\A/proc/(?:self|<pid>)/(?:status|maps|environ)\z}).map { |path| {"path" => path} }

@@ -37,6 +37,7 @@ RSpec.describe "isolated observation phases" do
       expect(manifests.last.dig("files", "notable")).to include("$HOME/.aws/credentials", "$PWD/observed-project-write")
       expect(manifests.last["canary_hits"]).to include(include("source" => ".aws/credentials", "seen_in" => "stdout"))
       expect(manifests.last["stdout"]).to include("[CANARY:")
+      expect(manifests.last["findings"]).to include(include("severity" => "critical"))
       expect(File.exist?(File.join(Dir.pwd, "observed-project-write"))).to be(false)
     ensure
       ENV.delete("BONEBED_REAL_SECRET")
