@@ -107,6 +107,18 @@ RSpec.describe Bonebed::Dig do
     end
   end
 
+  it "retries results with invalid manifest shapes or missing error status" do
+    Dir.mktmpdir do |results|
+      path = File.join(results, "demo-1.0.0-require.json")
+      dig = described_class.new(results_dir: results)
+      [nil, [], {gem: []}, {gem: {name: "demo"}}, {gem: {name: "demo"}, errors: nil},
+        {gem: {name: "demo"}, errors: ""}, {gem: {name: "demo"}, errors: {}}].each do |manifest|
+        File.write(path, JSON.generate(manifest))
+        expect(dig.result_exists?("demo", phase: "require", version: "1.0.0")).to be(false), manifest.inspect
+      end
+    end
+  end
+
   it "separates installed gem versions from platforms and lists dependencies" do
     Dir.mktmpdir do |gem_home|
       specifications = File.join(gem_home, "specifications")

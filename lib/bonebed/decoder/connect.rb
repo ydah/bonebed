@@ -24,8 +24,8 @@ module Bonebed
       end
 
       def internet_address(family, bytes, address_offset)
-        length = family == "inet" ? 4 : 16
-        minimum = family == "inet" ? 16 : 28
+        length = (family == "inet") ? 4 : 16
+        minimum = (family == "inet") ? 16 : 28
         raise ArgumentError, "short AF_#{family.upcase} sockaddr" if bytes.bytesize < minimum
 
         address = IPAddr.new_ntoh(bytes.byteslice(address_offset, length)).to_s

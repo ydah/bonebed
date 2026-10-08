@@ -4,6 +4,7 @@ module Bonebed
   module Decoder
     module Clone
       CLONE_THREAD = 0x00010000
+
       module_function
 
       def call(request, syscall: request.syscall)

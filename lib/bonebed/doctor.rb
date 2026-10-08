@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "rbconfig"
+require "bundler"
 
 module Bonebed
   class Doctor
@@ -8,6 +9,14 @@ module Bonebed
 
     def initialize(output: $stdout)
       @output = output
+    end
+
+    def self.container?
+      return true if File.exist?("/.dockerenv") || File.exist?("/run/.containerenv")
+
+      File.read("/proc/1/cgroup").match?(/docker|containerd|kubepods|libpod|lxc/)
+    rescue SystemCallError
+      false
     end
 
     def run
@@ -22,10 +31,25 @@ module Bonebed
         ["container seccomp profile", container_status, true]
       ]
       checks.each { |name, value, ok| @output.puts(format("%-30s %-24s %s", name, value, ok ? "OK" : "NG")) }
+      {
+        "Ruby" => RUBY_VERSION,
+        "RubyGems" => Gem::VERSION,
+        "Bundler" => Bundler::VERSION,
+        "user namespaces (max)" => read_setting("/proc/sys/user/max_user_namespaces"),
+        "AppArmor userns restriction" => read_setting("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"),
+        "cgroup v2" => enabled(File.exist?("/sys/fs/cgroup/cgroup.controllers")),
+        "container (heuristic)" => self.class.container? ? "detected" : "not detected"
+      }.each { |name, value| @output.puts(format("%-30s %s", name, value)) }
       checks.first(6).all?(&:last)
     end
 
     private
+
+    def read_setting(path)
+      File.read(path).strip
+    rescue SystemCallError
+      "unavailable"
+    end
 
     def linux?
       RUBY_PLATFORM.include?("linux")
@@ -66,8 +90,8 @@ module Bonebed
       return "not Linux" unless linux?
 
       mode = File.read("/proc/self/status")[/^Seccomp:\s+(\d+)/, 1]
-      mode == "0" ? "unconfined" : "filter active"
-    rescue Errno::ENOENT
+      (mode == "0") ? "unconfined" : "filter active"
+    rescue SystemCallError
       "unknown"
     end
   end

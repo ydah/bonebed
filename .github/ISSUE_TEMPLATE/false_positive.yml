@@ -1,0 +1,26 @@
+name: Misleading observation
+description: Report noise, incorrect attribution, or a misleading report about a gem.
+body:
+  - type: markdown
+    attributes:
+      value: An observed capability is not a maliciousness verdict. Remove secrets before sharing results.
+  - type: input
+    id: gem
+    attributes:
+      label: Gem name and version
+    validations:
+      required: true
+  - type: textarea
+    id: observation
+    attributes:
+      label: Observation
+      description: Include the Bonebed version, command, environment, and sanitized manifest excerpt.
+    validations:
+      required: true
+  - type: textarea
+    id: explanation
+    attributes:
+      label: Why the observation is misleading
+      description: Describe the expected behavior and supporting evidence.
+    validations:
+      required: true

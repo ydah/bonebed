@@ -14,14 +14,18 @@ module Bonebed
     module_function
 
     def match?(path, home:, cwd:)
+      path = File.expand_path(path)
       relative_match?(path, home, HOME) || relative_match?(path, cwd, PROJECT) ||
         ABSOLUTE.any? { |pattern| File.fnmatch?(pattern, path, FLAGS) }
     end
 
     def relative_match?(path, root, patterns)
-      return false if root.nil? || !path.start_with?("#{root}/")
+      return false if root.nil?
 
-      relative = path.delete_prefix("#{root}/")
+      prefix = "#{File.expand_path(root).delete_suffix("/")}/"
+      return false unless path.start_with?(prefix)
+
+      relative = path.delete_prefix(prefix)
       patterns.any? { |pattern| File.fnmatch?(pattern, relative, FLAGS) }
     end
     private_class_method :relative_match?

@@ -17,10 +17,15 @@ module Bonebed
       return replace(path, gem_path, "$GEM_HOME") if gem_path
       return replace(path, @cwd, "$PWD") if inside?(path, @cwd)
       return replace(path, @home, "$HOME") if inside?(path, @home)
-      return path == @tmpdir ? "$TMPDIR" : "$TMPDIR/<random>" if inside?(path, @tmpdir)
+      return (path == @tmpdir) ? "$TMPDIR" : "$TMPDIR/<random>" if inside?(path, @tmpdir)
 
       path.sub(%r{\A/proc/(?:\d+|self|thread-self)/task/\d+(?=/|\z)}, "/proc/<pid>/task/<tid>")
         .sub(%r{\A/proc/\d+(?=/|\z)}, "/proc/<pid>")
+    end
+
+    def scrub(text)
+      # Match complete absolute path tokens, including flag values and path lists.
+      text.gsub(%r{(?<![\w/])/(?:[^\s"'=:;,]+)}) { |path| call(path) }
     end
 
     private

@@ -4,7 +4,7 @@ require "tempfile"
 
 RSpec.describe Bonebed::Survey do
   it "continues after target errors and reports failure" do
-    dig = instance_double(Bonebed::Dig, result_exists?: false, run: nil)
+    dig = instance_double(Bonebed::Dig, result_exists?: false, last_observer_errors: [], run: nil)
     allow(dig).to receive(:last_errors).and_return([], ["failed"])
     entries = [{name: "rake", version: nil}, {name: "json", version: nil}]
 
@@ -14,7 +14,7 @@ RSpec.describe Bonebed::Survey do
 
   it "continues after a missing gem and records its failure" do
     error = Gem::LoadError.new("missing gem")
-    dig = instance_double(Bonebed::Dig, result_exists?: false, run: nil, last_errors: [], write_failure: nil)
+    dig = instance_double(Bonebed::Dig, result_exists?: false, last_observer_errors: [], run: nil, last_errors: [], write_failure: nil)
     allow(dig).to receive(:run).with("missing", phase: "require", version: nil, require_path: nil).and_raise(error)
     entries = [{name: "missing", version: nil}, {name: "rake", version: nil}]
 
@@ -24,7 +24,7 @@ RSpec.describe Bonebed::Survey do
   end
 
   it "passes an entry's require path to dig" do
-    dig = instance_double(Bonebed::Dig, result_exists?: false, run: nil, last_errors: [])
+    dig = instance_double(Bonebed::Dig, result_exists?: false, last_observer_errors: [], run: nil, last_errors: [])
     entry = {name: "sinatra", version: nil, require_path: "sinatra/base"}
 
     expect(described_class.new(dig:, output: StringIO.new).run([entry], phase: "require")).to be(true)
@@ -32,7 +32,7 @@ RSpec.describe Bonebed::Survey do
   end
 
   it "reclaims unreachable objects after every survey entry" do
-    dig = instance_double(Bonebed::Dig, result_exists?: false, run: nil, last_errors: [])
+    dig = instance_double(Bonebed::Dig, result_exists?: false, last_observer_errors: [], run: nil, last_errors: [])
     allow(GC).to receive(:start)
 
     described_class.new(dig:, output: StringIO.new).run([{name: "rake"}, {name: "json"}], phase: "require")
@@ -51,6 +51,7 @@ RSpec.describe Bonebed::Survey do
       @last_errors = []
     end
     dig.define_singleton_method(:last_errors) { @last_errors }
+    dig.define_singleton_method(:last_observer_errors) { ["observer warning"] }
 
     expect(described_class.new(dig:, output: StringIO.new, isolate: true).run([{name: "rake"}, {name: "json"}], phase: "require")).to be(true)
     expect(File.readlines(path, chomp: true).map(&:to_i)).to all(satisfy { |pid| pid != Process.pid })
@@ -70,6 +71,7 @@ RSpec.describe Bonebed::Survey do
       @last_errors = []
     end
     dig.define_singleton_method(:last_errors) { @last_errors }
+    dig.define_singleton_method(:last_observer_errors) { ["observer warning"] }
     dig.define_singleton_method(:write_failure) { |*| nil }
     entries = [{name: "killed"}, {name: "continued"}]
 

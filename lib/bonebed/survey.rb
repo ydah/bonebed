@@ -7,16 +7,20 @@ require "uri"
 
 module Bonebed
   class Survey
+    attr_reader :last_observer_errors
+
     STATS_URL = "https://rubygems.org/stats"
 
     def initialize(dig:, output: $stdout, isolate: false)
       @dig = dig
       @output = output
       @isolate = isolate
+      @last_observer_errors = []
     end
 
     def run(entries, phase:)
       successful = true
+      @last_observer_errors = []
       entries.each_with_index do |entry, index|
         name, version, require_path = entry.values_at(:name, :version, :require_path)
         require_path = nil if phase == "install"
@@ -26,7 +30,8 @@ module Bonebed
         end
 
         @output.puts "[#{index + 1}/#{entries.size}] #{phase} #{name}"
-        entry_successful, error = @isolate ? isolated_run(name, version, phase, require_path) : run_entry(name, version, phase, require_path)
+        entry_successful, error, observer_errors = @isolate ? isolated_run(name, version, phase, require_path) : run_entry(name, version, phase, require_path)
+        @last_observer_errors.concat(observer_errors || [])
         successful = false unless entry_successful
         @output.puts "  failed: #{error}" if error
       ensure
@@ -49,7 +54,7 @@ module Bonebed
         name, version, require_path = line.sub(/#.*/, "").split
         next unless name
 
-        entry = {name:, version: version == "-" ? nil : version}
+        entry = {name:, version: (version == "-") ? nil : version}
         entry[:require_path] = require_path if require_path
         entry
       end
@@ -82,7 +87,7 @@ module Bonebed
 
     def run_entry(name, version, phase, require_path)
       @dig.run(name, phase:, version:, require_path:)
-      [@dig.last_errors.empty?, nil]
+      [@dig.last_errors.empty?, nil, @dig.last_observer_errors]
     rescue Gem::LoadError, StandardError => error
       write_failure(name, version, phase, error)
       [false, error.message]
@@ -106,7 +111,7 @@ module Bonebed
       end
 
       Marshal.load(payload)
-    rescue StandardError => error
+    rescue => error
       write_failure(name, version, phase, error)
       [false, error.message]
     ensure

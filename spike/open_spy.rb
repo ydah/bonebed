@@ -9,7 +9,7 @@ count = 0
 
 open_syscalls.each do |syscall|
   supervisor.on(syscall) do |request|
-    argument = syscall == :open ? 0 : 1
+    argument = (syscall == :open) ? 0 : 1
     warn "#{syscall} #{request.read_string(request.args[argument])}"
     count += 1
     request.continue!(unsafe: true)

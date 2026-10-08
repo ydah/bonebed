@@ -104,7 +104,7 @@ RSpec.describe "fixture manifests" do
 
     Dir.mktmpdir("bonebed-timeout-") do |root|
       marker = File.join(root, "orphan")
-      code = <<~'RUBY'
+      code = <<~RUBY
         spawn(ARGV.fetch(0), "-e", "sleep 0.8; File.write(ARGV.fetch(0), 'orphan')", ARGV.fetch(1))
         puts "started"
         STDOUT.flush
@@ -128,7 +128,7 @@ RSpec.describe "fixture manifests" do
   end
 
   def probe_env(fixture)
-    fixture == "extconf" ? {"BONEBED_FIXTURE_PROBE" => "1"} : {}
+    (fixture == "extconf") ? {"BONEBED_FIXTURE_PROBE" => "1"} : {}
   end
 
   def observe(command, env, normalizer)

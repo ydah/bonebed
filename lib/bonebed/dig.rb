@@ -17,16 +17,22 @@ module Bonebed
   class Dig
     PHASES = %w[require install].freeze
     ROUTINE_RUBYGEMS_PREFIXES = %w[$HOME/.cache/gem/ $HOME/.local/share/gem/].freeze
-    attr_reader :results_dir, :last_errors
+    attr_reader :results_dir, :last_errors, :last_observer_errors
 
-    def initialize(results_dir: "results", timeout: 30, offline: false, baseline: Baseline.new(timeout:))
-      raise ArgumentError, "timeout must be positive" unless timeout.positive?
+    def initialize(results_dir: "results", timeout: nil, offline: false, baseline: Baseline.new,
+      output_limit: Session::OUTPUT_LIMIT, argv_limit: 64, quiet_target: false)
+      raise ArgumentError, "timeout must be positive" if timeout && !(timeout.is_a?(Numeric) && timeout.positive?)
 
+      raise ArgumentError, "output limit must be nonnegative" unless output_limit.is_a?(Integer) && output_limit >= 0
+      raise ArgumentError, "argv limit must be positive" unless argv_limit.is_a?(Integer) && argv_limit.positive?
+
+      @session_options = {output_limit:, argv_limit:, quiet_target:, target_stdout: $stderr}
       @results_dir = results_dir
       @timeout = timeout
       @offline = offline
       @baseline = baseline
       @last_errors = []
+      @last_observer_errors = []
     end
 
     def run(name, phase: "require", version: nil, require_path: nil)
@@ -35,9 +41,10 @@ module Bonebed
         Bundler.reset!
         Gem::Specification.reset
         baseline = @baseline.capture
-        phase == "install" ? install(name, version, baseline) : require_gem(name, version, require_path, baseline)
+        (phase == "install") ? install(name, version, baseline) : require_gem(name, version, require_path, baseline)
       end
       @last_errors = manifest.fetch("errors")
+      @last_observer_errors = manifest.fetch("observer_errors")
       FileUtils.mkdir_p(@results_dir)
       path = File.join(@results_dir, "#{name}-#{safe_component(manifest.dig("gem", "version"))}-#{phase}.json")
       File.write(path, "#{JSON.pretty_generate(manifest)}\n")
@@ -58,6 +65,8 @@ module Bonebed
       suffix = version ? safe_component(version) : "*"
       Dir[File.join(@results_dir, "#{name}-#{suffix}-#{phase}.json")].any? do |path|
         manifest = JSON.parse(File.read(path))
+        next false unless manifest.is_a?(Hash) && manifest["gem"].is_a?(Hash) && manifest["errors"].is_a?(Array)
+
         manifest.dig("gem", "name") == name &&
           manifest.fetch("errors", []).empty? &&
           (!require_path || manifest.dig("gem", "require_path") == require_path)
@@ -98,9 +107,9 @@ module Bonebed
         gem_home = File.join(root, "gems")
         isolate_runtime_gems(specification, gem_home)
         env = {"GEM_HOME" => gem_home, "GEM_PATH" => gem_home}
-        code = 'gem ARGV[0], "=#{ARGV[1]}"; require ARGV[2]'
+        code = 'gem ARGV[0], "=" + ARGV[1]; require ARGV[2]'
         collector = Session.new([RbConfig.ruby, "-e", code, name, specification.version.to_s, require_path],
-          env:, timeout: @timeout, offline: @offline).run
+          env:, timeout: @timeout || 60, offline: @offline, **@session_options).run
         normalizer = PathNormalizer.new(gem_paths: [gem_home, *Gem.path], tmpdir: root)
         manifest(name, specification.version.to_s, "require", collector.snapshot(normalizer), baseline,
           platform: specification.platform.to_s, require_path:)
@@ -151,7 +160,7 @@ module Bonebed
         requested = version ? "#{name}:#{version}" : name
         command = [RbConfig.ruby, "-S", "gem", "install", requested, "--no-document", "--install-dir", gem_home]
         env = {"GEM_HOME" => gem_home, "GEM_PATH" => gem_home, "HOME" => home}
-        collector = Session.new(command, env:, timeout: @timeout, offline: @offline).run
+        collector = Session.new(command, env:, timeout: @timeout || 600, offline: @offline, **@session_options).run
         gems = installed_gems(gem_home)
         installed = gems.find { |gem| gem.fetch("name") == name }
         cached = cached_gem(gem_home, name)
@@ -191,6 +200,12 @@ module Bonebed
       gem["require_path"] = require_path if require_path
       data = {
         "schema_version" => 1,
+        "tool" => {"name" => "bonebed", "version" => VERSION, "seccomp_notify" => Gem.loaded_specs["seccomp-notify"]&.version&.to_s},
+        "started_at" => observation[:started_at],
+        "target" => stringify_keys(observation.fetch(:target, {exit_status: nil, signal: nil, timed_out: false})),
+        "observer_errors" => observation.fetch(:observer_errors, []),
+        "stdout_truncated" => observation.fetch(:stdout_truncated, false),
+        "stderr_truncated" => observation.fetch(:stderr_truncated, false),
         "gem" => gem,
         "phase" => phase,
         "environment" => {"ruby" => RUBY_VERSION, "arch" => RbConfig::CONFIG.fetch("host_cpu"), "kernel" => `uname -r`.strip, "baseline_id" => baseline.id},

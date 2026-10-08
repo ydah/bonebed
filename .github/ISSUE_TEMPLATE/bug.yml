@@ -1,0 +1,27 @@
+name: Bug report
+description: Report a failure or incorrect observation in Bonebed.
+body:
+  - type: markdown
+    attributes:
+      value: Report vulnerabilities and observation bypasses privately using SECURITY.md. Remove secrets from logs.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include Bonebed and Ruby versions, kernel, architecture, and doctor output.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include the command, gem version, and a minimal harmless example.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Include relevant output or a sanitized manifest.
+    validations:
+      required: true

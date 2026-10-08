@@ -9,8 +9,8 @@ require_relative "session"
 
 module Bonebed
   class Baseline
-    CACHE_VERSION = 2
-    Result = Struct.new(:id, :observation, keyword_init: true)
+    CACHE_VERSION = 3
+    Result = Struct.new(:id, :observation)
 
     def initialize(cache_dir: ".bonebed/baselines", timeout: 30)
       @cache_dir = cache_dir
@@ -22,7 +22,8 @@ module Bonebed
 
       collector = Session.new([RbConfig.ruby, "-e", ""], timeout: @timeout).run
       observation = collector.snapshot(PathNormalizer.new)
-      raise Error, observation[:errors].join("; ") unless observation[:errors].empty?
+      errors = observation.fetch(:errors) + observation.fetch(:observer_errors)
+      raise Error, errors.join("; ") unless errors.empty?
 
       FileUtils.mkdir_p(@cache_dir)
       File.write(path, "#{JSON.pretty_generate(encode(observation))}\n")

@@ -113,7 +113,7 @@ module Bonebed
       return "unix:#{entry.fetch("path")}" if entry["family"] == "unix"
       return entry.fetch("family") unless entry.key?("addr")
 
-      address = entry["family"] == "inet6" ? "[#{entry.fetch("addr")}]" : entry.fetch("addr")
+      address = (entry["family"] == "inet6") ? "[#{entry.fetch("addr")}]" : entry.fetch("addr")
       "#{address}:#{entry.fetch("port")}"
     end
 

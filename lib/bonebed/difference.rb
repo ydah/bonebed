@@ -8,7 +8,7 @@ module Bonebed
       files = observed.fetch(:files).to_h do |mode, entries|
         [mode, subtract(entries, baseline.dig(:files, mode) || {})]
       end
-      {
+      observed.merge(
         files:,
         network: subtract(observed.fetch(:network), baseline.fetch(:network, {})),
         exec: subtract(observed.fetch(:exec), baseline.fetch(:exec, {})),
@@ -17,7 +17,7 @@ module Bonebed
         errors: observed.fetch(:errors),
         stdout: observed.fetch(:stdout, ""),
         stderr: observed.fetch(:stderr, "")
-      }
+      )
     end
 
     def subtract(observed, baseline)
