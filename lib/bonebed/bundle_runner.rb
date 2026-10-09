@@ -117,7 +117,16 @@ module Bonebed
     end
 
     def configure(environment)
-      environment.copy_gems(Gem::Specification.find_by_name("bundler"))
+      specification = Gem.loaded_specs.fetch("bundler")
+      raise Error, "Bundler runtime version does not match its specification" unless specification.version.to_s == Bundler::VERSION
+
+      if specification.default_gem? && !File.directory?(specification.full_gem_path)
+        source = Bundler.method(:root).source_location&.first
+        expected = File.join(RbConfig::CONFIG.fetch("rubylibdir"), "bundler.rb")
+        raise Error, "cannot verify default Bundler runtime source" unless source && File.file?(source) && File.file?(expected) && File.identical?(source, expected)
+      else
+        environment.copy_gems(specification)
+      end
       FileUtils.mkdir_p(File.join(environment.project, "vendor", "cache"))
       bundle_home = File.join(environment.root, "bundle")
       environment.env.merge!(
@@ -136,7 +145,10 @@ module Bonebed
     end
 
     def command
-      [RbConfig.ruby, "-e", 'load Gem.bin_path("bundler", "bundle")', "--", "install", "--local"]
+      code = "gem 'bundler', '= #{Bundler::VERSION}'; require 'bundler'; " \
+        "raise 'unexpected Bundler runtime version' unless Bundler::VERSION == #{Bundler::VERSION.inspect}; " \
+        "require 'bundler/friendly_errors'; Bundler.with_friendly_errors { require 'bundler/cli'; Bundler::CLI.start(ARGV, debug: true) }"
+      [RbConfig.ruby, "-e", code, "--", "install", "--local"]
     end
 
     def session_options(environment)

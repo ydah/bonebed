@@ -90,6 +90,39 @@ RSpec.describe Bonebed::BundleRunner do
     expect(File).not_to exist(marker)
   end
 
+  it "uses the verified stdlib Bundler when its default gem directory is absent" do
+    skip "Linux seccomp required" unless RUBY_PLATFORM.include?("linux")
+    source = Bundler.method(:root).source_location.first
+    standard_library = File.join(RbConfig::CONFIG.fetch("rubylibdir"), "bundler.rb")
+    skip "the active Bundler is installed separately from Ruby" unless File.identical?(source, standard_library)
+
+    write_inputs
+    package = build_package
+    specification = Gem.loaded_specs.fetch("bundler")
+    allow(specification).to receive(:default_gem?).and_return(true)
+    allow(specification).to receive(:full_gem_path).and_return(File.join(@root, "missing-default-bundler"))
+    expect_any_instance_of(Bonebed::GemEnvironment).not_to receive(:copy_gems)
+    runner = described_class.new(results_dir: File.join(@root, "results"), quiet_target: true,
+      prefetcher: double("prefetcher", call: [package]))
+    manifest = JSON.parse(File.read(runner.run(gemfile: @gemfile)))
+    expect(manifest.fetch("errors")).to be_empty
+    expect(manifest.dig("target", "exit_status")).to eq(0)
+  end
+
+  it "does not fall back for missing nondefault Bundler or a mismatched runtime source" do
+    specification = Gem.loaded_specs.fetch("bundler")
+    allow(specification).to receive(:full_gem_path).and_return(File.join(@root, "missing-bundler"))
+    allow(specification).to receive(:default_gem?).and_return(false)
+    runner = described_class.new
+    Bonebed::GemEnvironment.open do |environment|
+      expect(environment).to receive(:copy_gems).with(specification).and_raise(Errno::ENOENT)
+      expect { runner.send(:configure, environment) }.to raise_error(Errno::ENOENT)
+      allow(specification).to receive(:default_gem?).and_return(true)
+      allow(Bundler).to receive(:method).with(:root).and_return(double(source_location: [File.join(@root, "unverified.rb"), 1]))
+      expect { runner.send(:configure, environment) }.to raise_error(Bonebed::Error, /Bundler runtime/)
+    end
+  end
+
   it "records Gemfile execution failures as target failures" do
     skip "Linux seccomp required" unless RUBY_PLATFORM.include?("linux")
 

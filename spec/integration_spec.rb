@@ -105,13 +105,13 @@ RSpec.describe "fixture manifests" do
     Dir.mktmpdir("bonebed-timeout-") do |root|
       marker = File.join(root, "orphan")
       code = <<~RUBY
-        spawn(ARGV.fetch(0), "-e", "sleep 0.8; File.write(ARGV.fetch(0), 'orphan')", ARGV.fetch(1))
+        spawn(ARGV.fetch(0), "--disable-gems", "-e", "sleep 2; File.write(ARGV.fetch(0), 'orphan')", ARGV.fetch(1))
         puts "started"
         STDOUT.flush
         sleep 5
       RUBY
-      collector = Bonebed::Session.new([RbConfig.ruby, "-e", code, RbConfig.ruby, marker], timeout: 0.3).run
-      sleep 0.9
+      collector = Bonebed::Session.new([RbConfig.ruby, "--disable-gems", "-e", code, RbConfig.ruby, marker], timeout: 1).run
+      sleep 2.1
       observation = collector.snapshot(Bonebed::PathNormalizer.new)
 
       expect(observation.fetch(:stdout)).to include("started")
