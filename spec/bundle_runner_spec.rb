@@ -101,7 +101,7 @@ RSpec.describe Bonebed::BundleRunner do
     specification = Gem.loaded_specs.fetch("bundler")
     allow(specification).to receive(:default_gem?).and_return(true)
     allow(specification).to receive(:full_gem_path).and_return(File.join(@root, "missing-default-bundler"))
-    expect_any_instance_of(Bonebed::GemEnvironment).not_to receive(:copy_gems)
+    expect_any_instance_of(Bonebed::GemEnvironment).not_to receive(:copy_specification)
     runner = described_class.new(results_dir: File.join(@root, "results"), quiet_target: true,
       prefetcher: double("prefetcher", call: [package]))
     manifest = JSON.parse(File.read(runner.run(gemfile: @gemfile)))
@@ -115,11 +115,30 @@ RSpec.describe Bonebed::BundleRunner do
     allow(specification).to receive(:default_gem?).and_return(false)
     runner = described_class.new
     Bonebed::GemEnvironment.open do |environment|
-      expect(environment).to receive(:copy_gems).with(specification).and_raise(Errno::ENOENT)
+      expect(environment).to receive(:copy_specification).with(specification).and_raise(Errno::ENOENT)
       expect { runner.send(:configure, environment) }.to raise_error(Errno::ENOENT)
       allow(specification).to receive(:default_gem?).and_return(true)
       allow(Bundler).to receive(:method).with(:root).and_return(double(source_location: [File.join(@root, "unverified.rb"), 1]))
       expect { runner.send(:configure, environment) }.to raise_error(Bonebed::Error, /Bundler runtime/)
+    end
+  end
+
+  it "copies the active Bundler without resolving a different same-version default specification" do
+    specification = Gem.loaded_specs.fetch("bundler")
+    source = File.join(@root, "active-bundler")
+    FileUtils.mkdir_p(source)
+    File.write(File.join(source, "bundler.rb"), "active runtime")
+    gemspec = File.join(@root, "bundler.gemspec")
+    File.write(gemspec, specification.to_ruby)
+    allow(specification).to receive_messages(full_gem_path: source, loaded_from: gemspec,
+      default_gem?: false, extension_dir: File.join(@root, "no-extensions"))
+    alternate = specification.dup
+    allow(alternate).to receive(:full_gem_path).and_return(File.join(@root, "missing-default-bundler"))
+    allow(Gem::Resolver).to receive(:for_current_gems).and_return(double(resolve: [double(spec: alternate)]))
+
+    Bonebed::GemEnvironment.open do |environment|
+      described_class.new.send(:configure, environment)
+      expect(File.read(File.join(environment.gem_home, "gems", specification.full_name, "bundler.rb"))).to eq("active runtime")
     end
   end
 

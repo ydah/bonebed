@@ -125,7 +125,7 @@ module Bonebed
         expected = File.join(RbConfig::CONFIG.fetch("rubylibdir"), "bundler.rb")
         raise Error, "cannot verify default Bundler runtime source" unless source && File.file?(source) && File.file?(expected) && File.identical?(source, expected)
       else
-        environment.copy_gems(specification)
+        environment.copy_specification(specification)
       end
       FileUtils.mkdir_p(File.join(environment.project, "vendor", "cache"))
       bundle_home = File.join(environment.root, "bundle")
