@@ -262,6 +262,14 @@
                 "string",
                 "null"
               ]
+            },
+            "cleanup": {
+              "type": "object",
+              "properties": {
+                "mode": {"enum": ["tracked", "cgroup_v2"]},
+                "completed": {"type": ["boolean", "null"]},
+                "limitation": {"type": ["string", "null"]}
+              }
             }
           }
         }

@@ -16,6 +16,7 @@ require_relative "syscalls"
 require_relative "isolation"
 require_relative "path_normalizer"
 require_relative "landlock"
+require_relative "cgroup"
 
 module Bonebed
   class Session
@@ -62,6 +63,9 @@ module Bonebed
     end
 
     def run
+      @target_pid = nil
+      @cgroup = nil
+      @cgroup_cleaned = false
       if @offline
         begin
           @command = Isolation.offline_command(@command)
@@ -80,6 +84,11 @@ module Bonebed
         Isolation.subreaper!
       rescue Isolation::Unavailable => error
         @collector.record_observer_error(:subreaper, error)
+      end
+      begin
+        @cgroup = Cgroup.create
+      rescue Cgroup::Unavailable => error
+        record_cleanup_fallback(error)
       end
       if @trace_path
         @trace_io = File.open(@trace_path, File::WRONLY | File::CREAT | File::APPEND | File::NOFOLLOW, 0o600)
@@ -114,10 +123,11 @@ module Bonebed
       @collector.finish(started_at, nil, timed_out: true, started_time:, isolation: @isolation, **output(stdout_thread, stderr_thread))
       @collector
     ensure
-      terminate(supervisor&.target_pid) if supervisor && !status && !terminated
+      terminate(@target_pid) if @target_pid && !status && !terminated
       @watching = false
       watcher&.join
       cleanup_descendants
+      @cgroup&.close&.each { |message| @collector.record_observer_error(:cleanup, Error.new(message)) }
       [stdout_reader, stdout_writer, stderr_reader, stderr_writer].compact.each { |io| io.close unless io.closed? }
       [stdout_thread, stderr_thread].compact.each(&:join)
       @trace_io&.close
@@ -141,7 +151,13 @@ module Bonebed
         notify(:openat2, :socket, :connect, :execve, :execveat, :bind, :listen, :setsid, :exit, :exit_group,
           *process_syscalls, *Syscalls.file_changes, *Syscalls::DATAGRAMS, *Syscalls::SUSPICIOUS)
       end
+      barrier_reader, barrier_writer = IO.pipe if @cgroup
       supervisor = Seccomp::Notify.spawn(policy, poll_interval: 0.02) do
+        if barrier_reader
+          barrier_writer.close
+          exit! 126 unless barrier_reader.read(1) == "1"
+          barrier_reader.close
+        end
         Process.setpgrp
         IO.for_fd(1, autoclose: false).reopen(stdout)
         IO.for_fd(2, autoclose: false).reopen(stderr)
@@ -165,6 +181,20 @@ module Bonebed
         end
         exec(@env, [@command.first, @command.first], *@command.drop(1), chdir: @cwd, unsetenv_others: @unsetenv_others)
       end
+      @target_pid = supervisor.target_pid
+      if barrier_writer
+        barrier_reader.close
+        begin
+          @cgroup.attach(supervisor.target_pid)
+          @collector.cleanup_metadata = {"mode" => "cgroup_v2", "completed" => nil,
+                                         "limitation" => "cgroup migration remains possible when the target can write cgroup controls"}
+        rescue Cgroup::Unavailable => error
+          record_cleanup_fallback(error)
+        ensure
+          barrier_writer.write("1")
+          barrier_writer.close
+        end
+      end
       open_syscalls.each { |syscall| on(supervisor, syscall) { |request| handle_open(request, syscall) } }
       on(supervisor, :connect) { |request| handle_connect(request) }
       on(supervisor, :socket) do |request|
@@ -187,7 +217,16 @@ module Bonebed
       process_syscalls.each { |syscall| on(supervisor, syscall) { |request| handle_clone(request, syscall) } }
       %i[setsid exit exit_group].each { |syscall| on(supervisor, syscall) { |request| handle_lifetime(request, syscall) } }
       supervisor.on_error { |error, request| @collector.record_observer_error(request&.syscall || "supervisor", error) }
+      configured = true
       supervisor
+    ensure
+      [barrier_reader, barrier_writer].compact.each { |io| io.close unless io.closed? }
+      if supervisor && !configured
+        terminate(supervisor.target_pid)
+        @target_pid = nil
+        supervisor.stop
+        supervisor.run
+      end
     end
 
     def on(supervisor, syscall)
@@ -281,10 +320,21 @@ module Bonebed
 
     def cleanup_descendants
       @cleanup_mutex.synchronize do
+        if @cgroup && !@cgroup_cleaned
+          result = @cgroup.kill(timeout: 1)
+          @cgroup_cleaned = true
+          @tracking_mutex.synchronize { @tracked.merge!(result.processes.except(@target_pid)) }
+          result.errors.each { |message| @collector.record_observer_error(:cleanup, Error.new(message)) }
+          @collector.cleanup_metadata["completed"] = result.errors.empty? if @collector.cleanup_metadata&.fetch("mode") == "cgroup_v2"
+        end
         tracked = @tracking_mutex.synchronize { @tracked.dup }
-        # ponytail: unseen fork/reparent races require a delegated cgroup for complete tree cleanup.
         Isolation.cleanup(tracked).each { |message| @collector.record_observer_error(:cleanup, Error.new(message)) }
       end
+    end
+
+    def record_cleanup_fallback(error)
+      @collector.cleanup_metadata = {"mode" => "tracked", "completed" => nil,
+                                     "limitation" => "#{error.message}; an unobserved fork/reparent race may escape tracked cleanup"}
     end
 
     def handle_lifetime(request, syscall)

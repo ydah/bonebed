@@ -4,6 +4,7 @@ module Bonebed
   class Collector
     EVENT_GROUPS = %i[changes processes listen sockets suspicious dns anti_analysis].freeze
     attr_reader :errors, :observer_errors, :wall_ms, :status
+    attr_accessor :cleanup_metadata
 
     def initialize
       @files = {read: Hash.new(0), write: Hash.new(0)}
@@ -79,6 +80,7 @@ module Bonebed
         network: normalize_network(normalizer),
         exec: normalize_exec(normalizer),
         process_tree: @process_tree.values.map { |event| normalize_event(event, normalizer) },
+        cleanup: @cleanup_metadata&.dup,
         threads: @threads.dup,
         stats: {openat_total: @files.values.sum { |entries| entries.values.sum }, notify_roundtrips: @roundtrips, wall_ms: @wall_ms},
         errors: @errors.dup,

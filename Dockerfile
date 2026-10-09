@@ -7,7 +7,7 @@ COPY schema ./schema
 COPY docs ./docs
 COPY contrib ./contrib
 COPY examples ./examples
-COPY bonebed.gemspec README*.md CHANGELOG.md SECURITY.md LICENSE.txt ./
+COPY bonebed.gemspec plugins.rb README*.md CHANGELOG.md SECURITY.md LICENSE.txt ./
 RUN gem build --strict bonebed.gemspec --output bonebed.gem \
   && gem install --no-document ./bonebed.gem \
   && rm bonebed.gem \

@@ -36,7 +36,7 @@ module Bonebed
     end
 
     def matching(name, phase:, version: nil, require_path: nil, platform: nil, mode: nil, executable: nil, arguments: nil)
-      matches = self.class.read(@directory).select do |manifest|
+      matches = self.class.each(@directory).select do |manifest|
         gem = manifest.fetch("gem")
         gem["name"] == name && manifest["phase"] == phase &&
           (!version || gem["version"] == version.to_s) && (!platform || gem["platform"] == platform.to_s) &&
@@ -70,13 +70,28 @@ module Bonebed
     end
 
     def self.read(directory)
-      paths(directory).filter_map do |path|
+      each(directory).to_a
+    end
+
+    def self.each(directory)
+      return enum_for(__method__, directory) unless block_given?
+
+      index = {}
+      paths(directory).each do |path|
         manifest = load(path)
-        [manifest, File.mtime(path)] if manifest
+        next unless manifest
+
+        key = identity(manifest)
+        rank = [manifest.fetch("schema_version", 1), File.mtime(path)]
+        previous = index[key]
+        index[key] = [rank, path] unless previous && (rank <=> previous.first) <= 0
       rescue SystemCallError
         nil
-      end.group_by { |manifest, _mtime| identity(manifest) }
-        .values.map { |versions| versions.max_by { |manifest, mtime| [manifest.fetch("schema_version", 1), mtime] }.first }
+      end
+      index.each_value do |_rank, path|
+        manifest = load(path)
+        yield manifest if manifest
+      end
     end
 
     def self.mode_identity(mode)

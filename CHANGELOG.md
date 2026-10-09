@@ -15,6 +15,9 @@ Before 1.0, minor releases may contain breaking changes, listed explicitly below
 
 ### Added
 
+- Add an opt-in Bundler pre-install plugin that requires frozen, exactly approved package observations and stops on incomplete results or policy violations.
+
+- Stream aggregate report counts without retaining every manifest body in memory.
 - Observe additional open/exec/file-change syscalls, process creation, listeners, datagram destinations, bounded DNS questions, selected sensitive syscalls, and io_uring attempts.
 - Add decoded JSONL timelines, process relationships, environment profiles, write-only observations, and parallel survey workers.
 - Add repeated observations with retained samples and stable/flaky capability summaries; scope resume to complete groups and matching execution settings.

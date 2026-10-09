@@ -146,4 +146,20 @@ RSpec.describe Bonebed::ResultStore do
       expect(described_class.read(directory).map { |result| result.fetch("stdout") }).to eq(["new"])
     end
   end
+
+  it "streams the preferred identity without retaining manifest bodies in the index" do
+    Dir.mktmpdir do |directory|
+      legacy = legacy_manifest
+      File.write(File.join(directory, "legacy.json"), JSON.generate(legacy))
+      store = described_class.new(directory)
+      store.migrate
+      other = described_class.upgrade(legacy).merge("gem" => legacy.fetch("gem").merge("name" => "rack-test"))
+      store.write(other)
+      File.write(File.join(directory, "invalid.json"), "{")
+      stream = described_class.each(directory)
+      expect(stream).to be_a(Enumerator)
+      expect(stream.map { |manifest| [manifest.dig("gem", "name"), manifest["schema_version"]] }.sort).to eq([["rack", 2], ["rack-test", 2]])
+      expect(stream.to_a).to eq(described_class.read(directory))
+    end
+  end
 end

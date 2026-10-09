@@ -255,18 +255,25 @@ module Bonebed
 
     def self.report(arguments)
       format = "md"
+      summary = false
       OptionParser.new do |parser|
-        parser.banner = "Usage: bonebed report RESULTS_DIR [--format md]"
+        parser.banner = "Usage: bonebed report RESULTS_DIR [--format md|json|csv|html|sarif] [--summary]"
         parser.on("-h", "--help", "Show this help") {
           puts parser
           return EXIT_OK
         }
         parser.on("--format FORMAT") { |value| format = value }
+        parser.on("--summary", "Stream aggregate counts as JSON") { summary = true }
       end.parse!(arguments)
       raise ArgumentError, "unsupported report format" unless %w[md json csv html sarif].include?(format)
       raise ArgumentError, "results directory is required" unless arguments.one?
+      raise ArgumentError, "--summary emits JSON; use --format json or omit --format" if summary && !%w[md json].include?(format)
 
-      puts (format == "md") ? Report.new(arguments.first).markdown : format_report(ResultStore.read(arguments.first), format)
+      if summary
+        puts JSON.pretty_generate(Report.summary(arguments.first))
+      else
+        puts (format == "md") ? Report.new(arguments.first).markdown : format_report(ResultStore.read(arguments.first), format)
+      end
       EXIT_OK
     end
 

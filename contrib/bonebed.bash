@@ -3,8 +3,8 @@ _bonebed_complete() {
   local current previous commands options
   current=${COMP_WORDS[COMP_CWORD]}
   previous=${COMP_WORDS[COMP_CWORD-1]}
-  commands='help doctor baseline dig survey run report diff compare diff-lock history check lock policy migrate dataset monitor static'
-  options='--help --version --phase --results --timeout --offline --strict --quiet-target --output-limit --argv-limit --env-profile --writes-only --real-home --cwd --enforce --trace --repeat --jobs --require --platform --executable --file --gemfile --top --format --fail-on --policy --lock --output --state --manifest --sbom --last --update --refresh --docker'
+  commands='help doctor baseline dig survey run bundle report diff compare diff-lock history check lock policy migrate dataset monitor static'
+  options='--help --version --phase --results --timeout --offline --strict --quiet-target --output-limit --argv-limit --env-profile --writes-only --real-home --cwd --enforce --trace --repeat --jobs --require --platform --executable --file --gemfile --top --format --fail-on --policy --lock --output --state --manifest --sbom --last --update --refresh --summary --docker'
   case "$previous" in
     --phase) COMPREPLY=($(compgen -W 'install require all plugin exec' -- "$current")); return ;;
     --env-profile) COMPREPLY=($(compgen -W 'dev ci prod' -- "$current")); return ;;

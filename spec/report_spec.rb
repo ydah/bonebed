@@ -1,6 +1,27 @@
 # frozen_string_literal: true
 
+require "bonebed/cli"
+
 RSpec.describe Bonebed::Report do
+  it "aggregates a streaming summary and keeps unknown capabilities separate from false" do
+    Dir.mktmpdir do |directory|
+      manifest = {gem: {name: "demo", version: "1"}, phase: "require", errors: [],
+                  files: {read: [], write: []}, network: [], exec: [], stats: {}, stdout: "x" * 100_000}
+      File.write(File.join(directory, "demo.json"), JSON.generate(manifest))
+      File.write(File.join(directory, "failed.json"), JSON.generate(manifest.merge(gem: {name: "failed", version: "1"},
+        target: {exit_status: 1}, observer_errors: ["missing events"], network: [{family: "inet", addr: "127.0.0.1", port: 80}])))
+      expect(Bonebed::ResultStore).not_to receive(:read)
+      summary = described_class.summary(directory)
+      expect(summary.slice("manifests", "successful", "target_failures", "observer_failures")).to eq(
+        "manifests" => 2, "successful" => 1, "target_failures" => 1, "observer_failures" => 1
+      )
+      expect(summary.fetch("phases")).to eq("require" => 2)
+      expect(summary.dig("capabilities", "network")).to eq("observed" => 1, "not_observed" => 1, "unknown" => 0)
+      expect(summary.dig("capabilities", "dns")).to eq("observed" => 0, "not_observed" => 0, "unknown" => 2)
+      expect { Bonebed::CLI.report([directory, "--summary"]) }.to output(/"manifests": 2/).to_stdout
+    end
+  end
+
   it "reads nested v2 results, deduplicates migrated v1 files, and renders capabilities" do
     Dir.mktmpdir do |directory|
       manifest = {schema_version: 1, gem: {name: "demo", version: "1.0"}, phase: "require", errors: [],

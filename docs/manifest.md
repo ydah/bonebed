@@ -32,6 +32,13 @@ Repeating migration preserves existing v2 results. Reports recursively read resu
 prefer v2 when both versions describe the same identity, so migrated observations are not counted twice.
 Invalid or incomplete manifests are ignored by result lookup and reporting.
 
+`bonebed report RESULTS --summary` aggregates counts as JSON without keeping every manifest body in
+memory. It indexes identity keys, paths, schema versions, and modification times, then reads the
+preferred result for each identity. Migrated v2 results supersede v1 originals; otherwise the newest
+file wins. Memory grows with the path index and one manifest, rather than all captured output. Run it
+against a stable snapshot when a reproducible aggregate is required. Unknown capability values remain
+separate from both observed and not-observed counts; observer errors have their own count.
+
 ## Fields
 
 | Field | Meaning |
@@ -41,7 +48,7 @@ Invalid or incomplete manifests are ignored by result lookup and reporting.
 | `run.repeat`, `stability` | Optional sample group/index/count and complete-group stable/flaky capability keys |
 | `gem` | Name, resolved version, platform, require path, package SHA-256, extensions, executables, and RubyGems plugin presence |
 | `phase` | Observed phase: `install`, `require`, `plugin`, or command `exec` |
-| `environment` | Ruby version, architecture, kernel, and startup baseline identifier |
+| `environment` | Ruby version, architecture, kernel, startup baseline identifier, and optional cleanup diagnostics |
 | `target` | Target `exit_status`, terminating `signal`, and `timed_out` |
 | `capabilities` | Boolean summaries of observed behavior; unknown historical values are `null` |
 | `files.read` | Arrays grouped into `self` (target gem directory), `resolver` (resolver configuration), and `other` |
@@ -90,6 +97,12 @@ Stable means seen in every collected sample, not guaranteed behavior in every fu
 Optional JSONL traces contain elapsed time, thread/process/parent IDs, syscall names, and decoded
 arguments. They are separate artifacts from the manifest and can contain target-controlled private
 data. Process relationships describe observed events, not a complete guarantee of ancestry or cleanup.
+
+`environment.cleanup` reports `mode` (`cgroup_v2` or `tracked`), `completed`, and a `limitation` string.
+In cgroup mode, `completed: true` means the dedicated subtree became unpopulated after killing it;
+it cannot rule out earlier cgroup migrations. Tracked fallback leaves `completed` unknown (`null`)
+and describes why delegated cleanup was unavailable. Actual cleanup failures also appear in
+`observer_errors`. See [the cleanup threat model](threat-model.md#process-tree-cleanup-and-cgroup-delegation).
 Gem observation trace names include the requested prefix, gem, version, run UUID, and phase, avoiding
 overwrites between workers and repeated runs.
 

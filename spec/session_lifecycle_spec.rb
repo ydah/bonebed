@@ -3,6 +3,59 @@
 RSpec.describe "session trace and process lifetime" do
   before { skip "Linux seccomp and procfs are required" unless RUBY_PLATFORM.include?("linux") }
 
+  it "records unavailable cgroup delegation without failing an ordinary observation" do
+    allow(Bonebed::Cgroup).to receive(:create).and_raise(Bonebed::Cgroup::Unavailable, "fixture read-only delegation")
+    collector = Bonebed::Session.new([RbConfig.ruby, "-e", ""], quiet_target: true).run
+    snapshot = collector.snapshot(Bonebed::PathNormalizer.new)
+    expect(snapshot[:errors]).to be_empty
+    expect(snapshot[:observer_errors]).to be_empty
+    expect(snapshot[:cleanup]).to include("mode" => "tracked", "limitation" => include("fixture read-only delegation"))
+  end
+
+  it "holds the target before exec until cgroup attachment succeeds" do
+    Dir.mktmpdir do |root|
+      marker = File.join(root, "executed")
+      group = double("cgroup", kill: Bonebed::Cgroup::Result.new(processes: {}, errors: []), close: [])
+      expect(group).to receive(:close).once.and_return([])
+      allow(Bonebed::Cgroup).to receive(:create).and_return(group)
+      expect(group).to receive(:attach) do |pid|
+        expect(Bonebed::Isolation.process_info(pid).fetch(:parent)).to eq(Process.pid)
+        sleep 0.05
+        expect(File).not_to exist(marker)
+      end
+      collector = Bonebed::Session.new([RbConfig.ruby, "-e", 'File.write(ARGV.first, "yes")', marker], quiet_target: true).run
+      expect(collector.errors).to be_empty
+      expect(File).to exist(marker)
+      expect(collector.snapshot(Bonebed::PathNormalizer.new)[:cleanup]).to include("mode" => "cgroup_v2", "completed" => true)
+    end
+  end
+
+  it "releases the child into tracked cleanup when cgroup attachment is unavailable" do
+    group = double("cgroup", kill: Bonebed::Cgroup::Result.new(processes: {}, errors: []), close: [])
+    allow(group).to receive(:attach).and_raise(Bonebed::Cgroup::Unavailable, "fixture attachment rejected")
+    allow(Bonebed::Cgroup).to receive(:create).and_return(group)
+    collector = Bonebed::Session.new([RbConfig.ruby, "-e", 'puts "executed"'], quiet_target: true).run
+    snapshot = collector.snapshot(Bonebed::PathNormalizer.new)
+    expect(snapshot[:errors]).to be_empty
+    expect(snapshot[:stdout]).to include("executed")
+    expect(snapshot[:cleanup]).to include("mode" => "tracked", "limitation" => include("attachment rejected"))
+  end
+
+  it "reaps the waiting target if cgroup attachment is interrupted" do
+    group = double("cgroup", kill: Bonebed::Cgroup::Result.new(processes: {}, errors: []), close: [])
+    allow(Bonebed::Cgroup).to receive(:create).and_return(group)
+    pid = nil
+    allow(group).to receive(:attach) do |target|
+      pid = target
+      raise Interrupt
+    end
+    descriptors = Dir["/proc/self/fd/*"].size
+    expect { Bonebed::Session.new([RbConfig.ruby, "-e", "sleep 30"], quiet_target: true).run }.to raise_error(Interrupt)
+    expect { Process.waitpid(pid, Process::WNOHANG) }.to raise_error(Errno::ECHILD)
+    expect { Process.kill(0, pid) }.to raise_error(Errno::ESRCH)
+    expect(Dir["/proc/self/fd/*"].size).to eq(descriptors)
+  end
+
   it "writes decoded normalized JSONL events and links execs to their parent executable" do
     Dir.mktmpdir do |root|
       trace = File.join(root, "trace.jsonl")

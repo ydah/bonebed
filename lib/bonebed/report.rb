@@ -6,6 +6,27 @@ require_relative "result_store"
 
 module Bonebed
   class Report
+    def self.summary(directory)
+      raise ArgumentError, "results directory does not exist: #{directory}" unless Dir.exist?(directory)
+
+      totals = {"manifests" => 0, "successful" => 0, "target_failures" => 0, "observer_failures" => 0,
+                "phases" => Hash.new(0), "capabilities" => {}}
+      ResultStore.each(directory) do |manifest|
+        totals["manifests"] += 1
+        failed = !manifest.fetch("errors").empty? || manifest.dig("target", "timed_out") ||
+          manifest.dig("target", "signal") || ![nil, 0].include?(manifest.dig("target", "exit_status"))
+        totals[failed ? "target_failures" : "successful"] += 1
+        totals["observer_failures"] += 1 unless Array(manifest["observer_errors"]).empty?
+        totals["phases"][manifest.fetch("phase")] += 1
+        flags = ResultStore.capabilities(manifest).merge(manifest["capabilities"] || {})
+        flags.each do |key, value|
+          counts = totals["capabilities"][key] ||= {"observed" => 0, "not_observed" => 0, "unknown" => 0}
+          counts[{true => "observed", false => "not_observed"}.fetch(value, "unknown")] += 1
+        end
+      end
+      totals
+    end
+
     def initialize(directory)
       raise ArgumentError, "results directory does not exist: #{directory}" unless Dir.exist?(directory)
 

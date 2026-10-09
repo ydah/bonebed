@@ -55,6 +55,7 @@ module Bonebed
         "canary_hits" => [], "findings" => []
       }
       data = JSON.parse(JSON.generate(data))
+      data["environment"]["cleanup"] = observation[:cleanup] if observation[:cleanup]
       data["process_tree"] = observation.fetch(:process_tree, [])
       data["run"]["mode"]["isolation"] = observation[:isolation] if data["run"] && observation[:isolation]
       %i[processes listen sockets suspicious dns anti_analysis].each do |group|

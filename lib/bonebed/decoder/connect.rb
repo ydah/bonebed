@@ -36,7 +36,7 @@ module Bonebed
       private_class_method :internet_address
 
       def unix_path(bytes)
-        bytes.start_with?("\0") ? bytes.sub(/\0+\z/, "") : bytes.split("\0", 2).first
+        bytes.start_with?("\0") ? bytes.sub(/\0+\z/, "") : bytes.split("\0", 2).first.to_s
       end
       private_class_method :unix_path
     end

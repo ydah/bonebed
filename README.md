@@ -99,6 +99,7 @@ read-only image, drops capabilities, and sets container process, memory, and CPU
 | `bonebed survey --gemfile Gemfile.lock` | Observe gems from a Bundler lockfile |
 | `bonebed run -- COMMAND ARGS...` | Observe an explicit command without an implicit shell |
 | `bonebed report results --format md` | Summarize manifests; also accepts JSON, HTML, CSV, or SARIF |
+| `bonebed report results --summary` | Stream aggregate counts as JSON without retaining manifest bodies |
 | `bonebed diff BEFORE.json AFTER.json` | Compare normalized observed capability keys |
 | `bonebed compare GEM VERSION_A VERSION_B` | Observe and compare two gem versions |
 | `bonebed diff-lock BASE.lock HEAD.lock` | Observe dependencies whose versions changed in a lockfile |
@@ -165,6 +166,10 @@ Captured output is stored as UTF-8; invalid byte sequences are replaced so binar
 Schema v2 groups reads into the gem's own files, resolver configuration, and other paths. Reports begin with a capability matrix and support both v1 and v2 results. See [the manifest reference](docs/manifest.md) for fields, migration, and compatibility.
 
 Observation policies in `.bonebed.yml` classify findings after execution; they do not prevent target actions. `--enforce FILE` loads a separate Landlock configuration before execution and can be combined with `--offline`. See [policies and enforcement](docs/policies.md) for both formats and their limits, [CI integration](docs/ci.md) for the composite Action, and [datasets](docs/dataset.md) for local export and monitoring.
+
+An optional [Bundler plugin](docs/bundler-plugin.md) checks existing observations and approvals before
+a frozen `bundle install`, rejecting missing observations and unapproved changes. Install it explicitly
+in a trusted project. Bundler evaluates the Gemfile before the hook; the plugin does not sandbox it.
 
 `static PATH` parses Ruby source without executing it. It reports selected command, network, and
 `eval` call sites; `--manifest FILE` adds approximate links to observed capabilities. This requires

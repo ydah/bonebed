@@ -74,11 +74,39 @@ thread and its subsequent children, so Bonebed applies them immediately before t
 Allowed paths are canonicalized and pinned with `O_PATH`; concurrent parent-directory replacement
 between resolution and open remains a setup race. Landlock does not repair observation TOCTOU gaps.
 
-The supervisor becomes a child subreaper and tracks descendant identities. Cleanup uses pidfds and
-start-time checks to avoid signaling unrelated processes after PID reuse, and covers tested detached
-and double-forked children. A process that forks and reparents entirely between tracking points may
-escape that set. Complete tree cleanup requires a delegated cgroup; this implementation currently
-reports cgroup availability but does not create a target cgroup or use `cgroup.kill`.
+## Process tree cleanup and cgroup delegation
+
+When the supervisor's current cgroup v2 directory is writable and delegated, Bonebed creates a new,
+randomly named child cgroup for the observation. The target waits on a pipe after seccomp setup;
+the supervisor attaches and verifies its PID before releasing it to execute. The supervisor and
+unrelated processes remain outside that cgroup. Control files are accessed through a pinned directory
+descriptor, so replacing the directory's pathname cannot redirect a kill to another cgroup.
+
+After the root exits or observation stops, Bonebed captures process identities for reaping,
+refuses to kill a group that contains the supervisor, writes `cgroup.kill`, and waits for
+`cgroup.events` to report `populated 0`. Cleanup does not freeze the subtree: a supervisor moved
+into it by a same-UID process could otherwise freeze before its timeout handler can run.
+An interrupted cleanup attempt remains retryable rather than being recorded as completed.
+The wait is bounded; failures are observer errors. Kernel cgroup killing includes descendant cgroups
+and handles concurrent forks. See the [kernel cgroup v2 documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html#core-interface-files).
+
+This does not make a writable cgroup filesystem a security boundary against the target. A process
+with permission to write cgroup controls can migrate out, alter the group, or move other permitted
+processes into it. Prevent that access with an appropriate read-only or hidden cgroup mount and
+privilege separation before relying on subtree membership for hostile-code containment. Processes
+in uninterruptible kernel waits may also prevent cleanup from completing within the deadline.
+The kill covers children forked during enumeration, but their identities may be missed for targeted
+zombie reaping; Bonebed does not reap unrelated supervisor children to close that race.
+
+`environment.cleanup` records `mode`, `completed`, and `limitation`. An unavailable or failed
+delegation leaves `mode: "tracked"` and explains the limitation without failing ordinary observations.
+In this fallback the supervisor is still a child subreaper, and cleanup uses pidfds and start-time
+checks to avoid signaling reused PIDs. Tested detached and double-forked descendants are reaped,
+but an entirely unobserved fork/reparent race can escape the tracked set. `completed: true` in
+cgroup mode means the observed subtree became unpopulated; it does not prove that no process escaped
+its membership earlier. Empty target-created subgroups are removed bottom-up through pinned directory
+descriptors, with time and directory-count bounds. Only directories in the owned subtree are removed;
+symlinks, replacements, populated groups, and other removal failures produce observer errors.
 
 ## Evasion and incomplete observations
 

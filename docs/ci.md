@@ -46,6 +46,10 @@ Build the image from reviewed source with `docker build -t bonebed .`. Run `bone
 
 Local pre-commit checks can run `bonebed check results --lock Gemfile.capabilities.lock` against existing observations. Avoid executing newly added dependencies in a developer's credential-bearing process just to update an approval file.
 
+The optional [Bundler plugin](bundler-plugin.md) applies a stricter saved-observation gate before frozen
+installation: each compatible locked package must have exact-version approvals and complete observations.
+Its hook runs after Gemfile evaluation and is disabled when Bundler plugins are disabled.
+
 [examples/gitlab-ci.yml](../examples/gitlab-ci.yml) supplies an opt-in merge-request job for an ephemeral
 Linux shell runner with Docker. Set `BONEBED_CI_IMAGE` to a reviewed image digest, provide the bundled
 `contrib/docker-seccomp.json` at the indicated path, and register the dedicated runner tag. The job

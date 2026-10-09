@@ -18,6 +18,24 @@ RSpec.describe Bonebed::Decoder do
       expect(described_class.call(ipv6)).to eq(family: "inet6", addr: "2001:db8::1", port: 443)
       expect(described_class.call(unix)).to eq(family: "unix", path: "/tmp/bonebed.sock")
       expect(described_class.call([0].pack("S<"))).to be_nil
+      expect(described_class.call([1].pack("S<"))).to eq(family: "unix", path: "")
+    end
+
+    it "bounds arbitrary sockaddr input and returns well-formed endpoints" do
+      random = Random.new(7331)
+      500.times do
+        bytes = [random.rand(0..40)].pack("S<") + random.bytes(random.rand(0..140))
+        begin
+          event = described_class.call(bytes)
+          next unless event
+
+          expect(event.fetch(:family)).to be_a(String)
+          expect(event.fetch(:path)).to be_a(String) if event[:family] == "unix"
+          expect(event.fetch(:port)).to be_between(0, 65_535) if %w[inet inet6].include?(event[:family])
+        rescue ArgumentError
+          expect(bytes.bytesize > 128 || ([2, 10].include?(bytes.unpack1("S<")) && bytes.bytesize < 28)).to be(true)
+        end
+      end
     end
   end
 
@@ -89,6 +107,21 @@ RSpec.describe Bonebed::Decoder do
       allow(request).to receive(:read).with(100, 8).and_return([0x00010000].pack("Q<"))
 
       expect(described_class.call(request, syscall: :clone3)).to eq(syscall: "clone3")
+    end
+
+    it "rejects short clone3 reads and handles arbitrary flag bits" do
+      random = Random.new(42)
+      request = double("request", args: [100, 88])
+      (0...8).each do |length|
+        allow(request).to receive(:read).with(100, 8).and_return(random.bytes(length))
+        expect { described_class.call(request, syscall: :clone3) }.to raise_error(ArgumentError, /short/)
+      end
+      200.times do
+        flags = random.rand(0...(1 << 64))
+        allow(request).to receive(:read).with(100, 8).and_return([flags].pack("Q<"))
+        expected = (flags & described_class::CLONE_THREAD).zero? ? nil : {syscall: "clone3"}
+        expect(described_class.call(request, syscall: :clone3)).to eq(expected)
+      end
     end
   end
 end

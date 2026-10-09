@@ -11,7 +11,10 @@ module Bonebed
         flags = if syscall == :clone3
           return if request.args.fetch(1) < 8
 
-          request.read(request.args.fetch(0), 8).unpack1("Q<")
+          bytes = request.read(request.args.fetch(0), 8)
+          raise ArgumentError, "short clone3 flags read" unless bytes.bytesize == 8
+
+          bytes.unpack1("Q<")
         else
           request.args.fetch(0)
         end

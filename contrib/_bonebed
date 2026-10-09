@@ -2,8 +2,8 @@
 # Put this file on $fpath before running compinit.
 _bonebed() {
   local -a commands options
-  commands=(help doctor baseline dig survey run report diff compare diff-lock history check lock policy migrate dataset monitor static)
-  options=(--help --version --phase --results --timeout --offline --strict --quiet-target --output-limit --argv-limit --env-profile --writes-only --real-home --cwd --enforce --trace --repeat --jobs --require --platform --executable --file --gemfile --top --format --fail-on --policy --lock --output --state --manifest --sbom --last --update --refresh --docker)
+  commands=(help doctor baseline dig survey run bundle report diff compare diff-lock history check lock policy migrate dataset monitor static)
+  options=(--help --version --phase --results --timeout --offline --strict --quiet-target --output-limit --argv-limit --env-profile --writes-only --real-home --cwd --enforce --trace --repeat --jobs --require --platform --executable --file --gemfile --top --format --fail-on --policy --lock --output --state --manifest --sbom --last --update --refresh --summary --docker)
   case ${words[CURRENT-1]} in
     --phase) compadd install require all plugin exec; return ;;
     --env-profile) compadd dev ci prod; return ;;
