@@ -62,9 +62,22 @@ and the separate capability approval lock. Merge it into your Lefthook configura
 and reviewing both. It does not refresh stale observations or prove they match an unobserved lockfile
 change; the isolated CI observation remains necessary.
 
-The nightly workflow runs fixed Linux fixtures and a separate live top-20 RubyGems survey with retained
-artifacts. These jobs are configured in source; a successful hosted execution has not yet been verified.
-Neither job creates issues automatically.
+The nightly workflow runs fixed Linux fixtures, a fixed three-sample benchmark, and a separate live
+top-20 RubyGems survey. A separate job compares retained artifacts with the previous successful run
+of the same workflow and branch, searching at most the latest 100 successful runs. Only this comparison
+job has `actions: read`; target execution receives no GitHub token. Downloads have deadlines and require
+matching workflow, repository, run, and artifact metadata. The JSON comparison artifact records missing
+history, invalid inputs, failed observations, and incompatible contexts explicitly; it creates no issues
+or external notifications. The new hosted comparison job has not yet been verified.
+Older successful runs without a benchmark still provide observation history; their benchmark result
+is explicitly `no_previous_benchmark`. Missing current artifacts or invalid existing artifacts fail retrieval.
+
+Capability comparisons require successful known target status, matching observer/dependency versions,
+Ruby/architecture/kernel, observation mode and invocation. Plugin/bundle observations also require a
+matching Bundler version. Package version changes are reported separately from added/removed capabilities,
+and added capabilities carry default-policy findings. Benchmarks record CPU, kernel, Ruby, observer,
+workload and mode metadata; only exact known environments are compared. The report shows sample means
+and deltas, without an uncalibrated performance pass/fail threshold or safety verdict.
 
 ## Release image provenance
 

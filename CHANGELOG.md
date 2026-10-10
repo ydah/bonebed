@@ -15,6 +15,7 @@ Before 1.0, minor releases may contain breaking changes, listed explicitly below
 
 ### Added
 
+- Compare nightly observations and benchmark samples with compatible previous successful runs, retaining missing-history and failure diagnostics.
 - Add best-effort syscall policy refusal, other-process signal observations, working-directory build attribution, and own-package write classification.
 - Add verbose diagnostics, optional container-only execution, and a validated local ranking snapshot fallback.
 - Add Markdown report contents, severity-ordered findings, and folded target details; separate Markdown, JSON, SARIF, CSV, and HTML formatters while preserving report APIs.

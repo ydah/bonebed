@@ -21,6 +21,15 @@ jobs:
         with:
           ruby-version: '4.0'
           bundler-cache: true
+      - name: Measure the fixed benchmark workload
+        run: bundle exec ruby -Ilib script/bench.rb > benchmark.json
+      - name: Preserve benchmark environment and samples
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-benchmark
+          path: benchmark.json
+          retention-days: 30
+          if-no-files-found: error
       - name: Run deterministic Linux fixture regressions
         run: bundle exec rspec spec/integration_spec.rb spec/phases_spec.rb spec/analysis_spec.rb spec/analysis_cli_spec.rb
 
@@ -51,5 +60,34 @@ jobs:
         with:
           name: nightly-observations
           path: results/
+          retention-days: 30
+          if-no-files-found: error
+
+  compare:
+    needs: [fixtures, registry]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: '4.0'
+          bundler-cache: true
+      - name: Compare with the previous successful nightly run on this branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bundle exec ruby -Ilib script/nightly_compare.rb nightly-comparison.json
+      - name: Preserve comparison including missing history and errors
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-comparison
+          path: nightly-comparison.json
           retention-days: 30
           if-no-files-found: error
