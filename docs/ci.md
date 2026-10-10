@@ -1,5 +1,10 @@
 # CI integration
 
+The repository's test matrix enables unprivileged user namespaces on its disposable GitHub-hosted
+Ubuntu runners so the sinkhole fixtures execute rather than skip. This test-only kernel setting is
+not applied by the CLI or container launcher. Restricted hosts still receive a sinkhole setup error
+before target execution; see [sinkhole requirements](sinkhole.md).
+
 Use the composite action on a Linux GitHub-hosted runner with Docker. It builds the checked-out action source, compares the base and head `Gemfile.lock`, observes changed or added dependencies, and writes a Markdown diff, JSON diff, and SARIF report. Unchanged dependencies are not executed.
 
 Pin the action to a reviewed full commit SHA. A workflow in this repository can use `uses: ./` after checkout. Other repositories use `uses: ydah/bonebed@<reviewed-full-commit-sha>`.
