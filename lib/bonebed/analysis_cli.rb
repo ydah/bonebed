@@ -8,6 +8,7 @@ require_relative "manifest_diff"
 require_relative "policy"
 require_relative "capability_lock"
 require_relative "sarif"
+require_relative "formatter"
 require_relative "result_store"
 require_relative "command_runner"
 require_relative "static_analysis"
@@ -46,7 +47,7 @@ module Bonebed
 
       flags = arguments.take(separator)
       command = arguments.drop(separator + 1)
-      options = {results_dir: "results", timeout: 60, offline: false, env_profile: "dev"}
+      options = {results_dir: "results", timeout: 60, offline: false, env_profile: "dev"}.merge(execution_defaults)
       options.merge!(analysis_policy({}).defaults.slice("offline", "env_profile").transform_keys(&:to_sym)) if File.file?(".bonebed.yml")
       parser = OptionParser.new do |parser|
         parser.banner = "Usage: bonebed run [options] -- COMMAND [ARGUMENTS...]"
@@ -64,11 +65,11 @@ module Bonebed
       raise ArgumentError, "unexpected arguments before --: #{flags.join(" ")}" unless flags.empty?
       raise ArgumentError, "command is required after --" if command.empty?
 
-      runner = CommandRunner.new(**options.except(:strict))
-      warn_host
+      warn_host(options)
+      runner = CommandRunner.new(**options.except(:strict, *EXECUTION_OPTIONS))
       path = runner.run(command)
       puts path
-      summarize(path)
+      summarize(path, verbose: options[:verbose])
       observation_status(runner.last_errors.empty?, runner.last_observer_errors, options[:strict])
     end
 
@@ -225,32 +226,7 @@ module Bonebed
     end
 
     def self.format_report(manifests, format, policy: nil, lockfile: nil)
-      return JSON.pretty_generate(manifests) if format == "json"
-      return JSON.pretty_generate(Sarif.call(manifests, policy:, lockfile:)) if format == "sarif"
-
-      rows = manifests.flat_map do |manifest|
-        findings = policy ? policy.findings(manifest) : manifest.fetch("findings") { Policy.new.findings(manifest) }
-        findings = [{"capability" => "none", "severity" => "", "rule_id" => "", "allowed" => false}] if findings.empty?
-        findings.map { |finding| [manifest.dig("gem", "name"), manifest.dig("gem", "version"), manifest["phase"], finding["capability"], finding["rule_id"], finding["severity"], finding["allowed"]] }
-      end
-      headers = %w[gem version phase capability rule severity allowed]
-      case format
-      when "csv"
-        ([headers] + rows).map do |row|
-          row.map do |value|
-            text = value.to_s
-            text = "'#{text}" if text.match?(/\A[=+\-@\t\r\n]/)
-            "\"#{text.gsub('"', '""')}\""
-          end.join(",")
-        end.join("\r\n") << "\r\n"
-      when "html"
-        table = rows.map { |row| "<tr>#{row.map { |value| "<td>#{CGI.escapeHTML(value.to_s)}</td>" }.join}</tr>" }.join("\n")
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Bonebed findings</title><body><table><caption>Observed gem capabilities</caption><thead><tr>#{headers.map { |header| "<th scope=\"col\">#{header}</th>" }.join}</tr></thead><tbody>#{table}</tbody></table></body></html>"
-      when "md"
-        (["| #{headers.join(" | ")} |", "| #{headers.map { "---" }.join(" | ")} |"] + rows.map { |row| "| #{row.map { |value| markdown_cell(value) }.join(" | ")} |" }).join("\n")
-      else
-        raise ArgumentError, "format must be md, json, csv, html, or sarif"
-      end
+      Formatter.call(manifests, format, policy:, lockfile:)
     end
 
     def self.analysis_parser(usage, options, formats: %w[md json sarif])
@@ -265,10 +241,13 @@ module Bonebed
     end
 
     def self.observation_defaults
-      {format: "md", phase: "all", results_dir: "results", offline: false}
+      {format: "md", phase: "all", results_dir: "results", offline: false}.merge(execution_defaults)
     end
 
     def self.observation_options(parser, options)
+      execution_options(parser, options)
+      deny_option(parser, options)
+      parser.on("--sinkhole", "Observe network intent with local sinkhole responses") { options[:sinkhole] = true }
       parser.on("--results DIR") { |value| options[:results_dir] = value }
       parser.on("--phase PHASE", Dig::PHASES) { |value| options[:phase] = value }
       parser.on("--offline") { options[:offline] = true }
@@ -308,13 +287,14 @@ module Bonebed
     end
 
     def self.observe_cached(name, version, options)
-      dig = Dig.new(**options.slice(:results_dir, :offline, :timeout, :env_profile, :writes_only, :real_home, :cwd, :enforce), quiet_target: true)
+      dig = Dig.new(**options.slice(:results_dir, :offline, :sinkhole, :timeout, :env_profile, :writes_only, :real_home, :cwd, :enforce, :deny), quiet_target: true)
       mode = dig.observation_mode
       store = ResultStore.new(options[:results_dir])
       if options[:phase] == "all"
         store.matching(name, phase: "install", version:, mode:).each do |installed|
           gem = installed.fetch("gem")
           phases = gem["rubygems_plugin"] ? %w[require plugin] : %w[require]
+          phases << "bundler_plugin" if gem["bundler_plugin"]
           cached = phases.flat_map { |phase| store.matching(name, phase:, version:, platform: gem["platform"], mode:) }
           return [installed, *cached] if (phases - cached.map { |manifest| manifest.fetch("phase") }).empty?
         end
@@ -329,7 +309,7 @@ module Bonebed
         return cached unless cached.empty?
       end
 
-      warn_host
+      warn_host(options)
       Array(dig.run(name, phase: options[:phase], version:)).map { |path| read_manifest(path) }
     end
 
@@ -345,9 +325,22 @@ module Bonebed
     def self.compare_manifests(before, after, counts: false)
       manifest = after || before
       empty = {"schema_version" => 2}
+      changes = ManifestDiff.call(before || empty, after || empty, counts:)
       {"gem" => manifest.dig("gem", "name"), "phase" => manifest.fetch("phase"),
-       "before_version" => before&.dig("gem", "version"), "after_version" => after&.dig("gem", "version")}
-        .merge(ManifestDiff.call(before || empty, after || empty, counts:))
+       "before_version" => before&.dig("gem", "version"), "after_version" => after&.dig("gem", "version"),
+       "findings" => diff_findings(after, changes.fetch("added")),
+       "removed_findings" => diff_findings(before, changes.fetch("removed"))}.merge(changes)
+    end
+
+    def self.diff_findings(manifest, keys)
+      return [] if keys.empty?
+
+      findings = Policy.new.findings(manifest, keys:)
+      unclassified = keys - findings.map { |finding| finding.fetch("capability") }
+      findings + unclassified.map do |key|
+        {"rule_id" => "unclassified-capability", "severity" => "info",
+         "message" => "Observed capability without a matching policy rule", "capability" => key, "allowed" => false}
+      end
     end
 
     def self.compare_phases(before, after, counts: false)
@@ -364,13 +357,21 @@ module Bonebed
         puts "# Capability diff"
         changes.each do |change|
           puts "\n## #{markdown_cell(change.fetch("gem"))} (#{markdown_cell(change.fetch("phase"))})"
-          %w[added removed].each { |kind| puts "\n#{kind.capitalize}: #{change.fetch(kind).empty? ? "none" : change.fetch(kind).map { |key| markdown_cell(key) }.join(", ")}" }
+          %w[added removed].each do |kind|
+            findings = change.fetch((kind == "added") ? "findings" : "removed_findings")
+            entries = change.fetch(kind).map do |key|
+              severity = findings.select { |finding| finding.fetch("capability") == key }
+                .max_by { |finding| Policy::SEVERITIES.index(finding.fetch("severity")) }.fetch("severity")
+              "[#{severity}] #{markdown_cell(key)}"
+            end
+            puts "\n#{kind.capitalize}: #{entries.empty? ? "none" : entries.join(", ")}"
+          end
           puts "\nCounts: #{markdown_cell(JSON.generate(change["counts"]))}" if change["counts"]
         end
       when "sarif"
         manifests = changes.map do |change|
           {"gem" => {"name" => change.fetch("gem"), "version" => change["after_version"] || change["before_version"]},
-           "phase" => change.fetch("phase"), "findings" => change.fetch("added").map { |key| added_finding(key) }}
+           "phase" => change.fetch("phase"), "findings" => change.fetch("findings")}
         end
         puts JSON.pretty_generate(Sarif.call(manifests, lockfile:))
       else

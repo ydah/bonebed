@@ -32,6 +32,17 @@ RSpec.describe "manifest analysis" do
       "listen:inet6:[::1]:8080", "syscall:memfd_create", "file:rename:$PWD/a:$PWD/b")
   end
 
+  it "compares sinkhole destinations and evaluates them as install network activity" do
+    manifest["network_intent"] = [{"protocol" => "http", "host" => "api.example.invalid", "path" => "/collect", "method" => "POST"},
+      {"protocol" => "tls", "host" => "secure.example.invalid", "count" => 2}]
+    keys = Bonebed::CapabilityKeys.counts(manifest)
+    expect(keys).to include("network:http:api.example.invalid" => 1, "network:tls:secure.example.invalid" => 2)
+    findings = Bonebed::Policy.new.violations(manifest).select { |finding| finding["rule_id"] == "install-network" }
+    expect(findings.map { |finding| finding["capability"] }).to include("network:http:api.example.invalid", "network:tls:secure.example.invalid")
+    manifest["network_intent"].first["protocol"] = "unknown"
+    expect { Bonebed::CapabilityKeys.call(manifest) }.to raise_error(ArgumentError, /protocol/)
+  end
+
   it "ignores count changes unless requested and reports added and removed keys" do
     newer = Marshal.load(Marshal.dump(manifest))
     newer["network"][0]["count"] = 9
@@ -88,6 +99,14 @@ RSpec.describe "manifest analysis" do
     expect(policy.violations(manifest).map { |entry| entry["rule_id"] }).not_to include("credential-read")
     manifest["phase"] = "require"
     expect(policy.violations(manifest).map { |entry| entry["rule_id"] }).to include("credential-read")
+  end
+
+  it "evaluates explicit diff keys with the same phase rules and permissions" do
+    policy = Bonebed::Policy.new("allow" => {"demo" => {"install" => ["exec:**"]}})
+    findings = policy.findings(manifest, keys: ["exec:/usr/bin/new-tool", "network:inet:192.0.2.1:443"])
+    expect(findings).to contain_exactly(include("rule_id" => "external-command", "severity" => "medium", "allowed" => true),
+      include("rule_id" => "install-network", "severity" => "high", "allowed" => false))
+    expect(policy.findings(manifest, keys: [])).to eq([])
   end
 
   it "supports disabled and overridden rules with validated defaults" do

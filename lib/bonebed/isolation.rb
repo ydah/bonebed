@@ -86,6 +86,10 @@ module Bonebed
       raise Unavailable, "child subreaper unavailable: #{error.message}"
     end
 
+    def target_dumpable!
+      syscall!(:prctl, 4, 1, 0, 0, 0)
+    end
+
     def descendants(root_pid)
       processes = Dir["/proc/[0-9]*/stat"].filter_map do |path|
         pid = File.basename(File.dirname(path)).to_i

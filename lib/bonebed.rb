@@ -4,6 +4,7 @@ require_relative "bonebed/version"
 
 module Bonebed
   class Error < StandardError; end
+  class ObserverError < Error; end
 end
 
 require_relative "bonebed/doctor"

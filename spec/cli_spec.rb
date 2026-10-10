@@ -56,6 +56,11 @@ RSpec.describe Bonebed::CLI do
       expect { described_class.start(%w[dig demo --quiet-target --output-limit 128 --argv-limit 4]) }.to output.to_stdout.and output.to_stderr
     end
 
+    it "forwards sinkhole mode" do
+      expect(Bonebed::Dig).to receive(:new).with(hash_including(sinkhole: true)).and_return(dig)
+      expect { expect(described_class.start(%w[dig demo --sinkhole])).to eq(0) }.to output.to_stdout.and output.to_stderr
+    end
+
     it "forwards repeat counts and executable arguments without parsing target flags" do
       expect(Bonebed::Dig).to receive(:new).with(hash_including(repeat: 2)).and_return(dig)
       expect(dig).to receive(:run).with("demo", hash_including(phase: "exec", executable: "demo-tool", arguments: ["--version"]))
@@ -96,10 +101,21 @@ RSpec.describe Bonebed::CLI do
   end
 
   it "honors strict mode for survey observer failures" do
-    survey = double("survey", run: true, last_observer_errors: ["decoder failure"])
+    survey = double("survey", run: true, last_observer_errors: ["decoder failure"], fatal_observer_error?: false, target_failed?: false)
     allow(Bonebed::Dig).to receive(:new).and_return(double("dig"))
     allow(Bonebed::Survey).to receive(:new).and_return(survey)
     allow(Bonebed::Survey).to receive(:file).with("gems.txt").and_return([{name: "demo"}])
     expect { expect(described_class.start(%w[survey --file gems.txt --strict])).to eq(2) }.to output(/observer.*decoder failure/).to_stderr
+  end
+
+  it "forwards sinkhole in survey and bundle commands" do
+    allow(Bonebed::Survey).to receive(:file).with("gems.txt").and_return([{name: "demo"}])
+    expect(Bonebed::Dig).to receive(:new).with(hash_including(sinkhole: true)).and_return(double)
+    allow(Bonebed::Survey).to receive(:new).and_return(double(run: true, last_observer_errors: [], fatal_observer_error?: false, target_failed?: false))
+    expect(described_class.start(%w[survey --file gems.txt --sinkhole])).to eq(0)
+    expect(Bonebed::BundleRunner).to receive(:new).with(hash_including(sinkhole: true))
+      .and_return(double(run: "bundle.json", last_errors: [], last_observer_errors: [], fatal_observer_error?: false))
+    allow(described_class).to receive(:summarize)
+    expect { expect(described_class.start(%w[bundle --sinkhole])).to eq(0) }.to output("bundle.json\n").to_stdout
   end
 end

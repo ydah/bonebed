@@ -117,9 +117,23 @@ or service tokens. They use the bundled Docker seccomp profile; their root files
 and resources are bounded. These limits do not
 replace the threat model or a dedicated environment for hostile samples.
 
+The template requests a GitHub artifact attestation for each completed archive, including archives
+containing failed observations. The signed digest binds the archive bytes to the workflow identity;
+it does not certify that a gem is safe or that an observation is complete. The attestation step uses
+OIDC on the runner after the target container exits; the target receives no signing credentials.
+After downloading an archive, verify it against the actual publishing repository before extracting it:
+
+```sh
+gh attestation verify bonebed-shard-0.tar.gz --repo OWNER/bonebed-data
+```
+
+Retain the verification output and confirm its workflow/ref matches the publisher you intended to
+trust. Repacking or editing an archive changes its digest. This source template has not itself produced
+a published dataset attestation; operators must enable it and verify a real run.
+
 The template runs fresh surveys; it does not restore monitoring state, publish a website, create an
-external dataset repository, sign files, or notify maintainers. Configure those operational steps
-separately if needed, and retain the image digest from each artifact for reproduction.
+external dataset repository, or notify maintainers. Configure those operational steps separately if
+needed, and retain the image digest from each artifact for reproduction.
 
 ## Review observations before public allegations
 

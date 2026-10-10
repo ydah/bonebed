@@ -29,7 +29,7 @@ This README describes the current source checkout. Features listed under `Unrele
 
 ## Features
 
-- Profile install, require, and RubyGems plugin activity
+- Profile install, require, RubyGems plugins, and Bundler plugin registration
 - Fetch packages before observation and use phase-specific baselines to remove installation machinery
 - Detect access to decoy credentials in disposable home and project directories
 - Observe file changes, DNS questions, UDP destinations, listeners, commands, processes, threads, and selected sensitive syscalls
@@ -78,6 +78,9 @@ docker build -t bonebed:local .
 BONEBED_IMAGE=bonebed:local bundle exec exe/bonebed --docker dig rainbow --phase all --offline
 ```
 
+Use `--docker ... --ruby 3.3,3.4,4.0` to compare observations across container runtimes; see
+[Ruby matrix observations](docs/ruby-matrix.md) for image preparation and comparison limits.
+
 `--docker` mounts the current directory read-only and the results directory read-write. It uses a
 read-only image, drops capabilities, and sets container process, memory, and CPU limits. Override
 `BONEBED_IMAGE` with a reviewed image digest in automation.
@@ -91,10 +94,11 @@ read-only image, drops capabilities, and sets container process, memory, and CPU
 | `bonebed baseline [--refresh]` | Create or refresh the startup baseline |
 | `bonebed dig GEM` | Observe a gem while it is required with only its runtime dependency closure visible; common load paths are inferred, or use `--require PATH` |
 | `bonebed dig GEM --phase install` | Prefetch packages, then observe local installation in disposable directories |
-| `bonebed dig GEM --phase all` | Observe linked install/require phases and detected RubyGems plugins in one environment |
+| `bonebed dig GEM --phase all` | Observe linked install/require phases and detected RubyGems/Bundler plugins in one environment |
 | `bonebed dig GEM --phase plugin` | Install a gem and observe RubyGems plugin loading |
+| `bonebed dig GEM --phase bundler_plugin` | Install a gem and observe registration through Bundler's plugin API |
 | `bonebed dig GEM --phase exec --executable NAME -- ARGS...` | Observe a declared gem executable with literal arguments |
-| `bonebed survey --top N` | Observe up to 100 gems from RubyGems.org's all-time ranking |
+| `bonebed survey --top N` | Observe gems from RubyGems.org's paginated all-time ranking |
 | `bonebed survey --file FILE` | Observe gems listed as `NAME [VERSION|-] [REQUIRE_PATH]` |
 | `bonebed survey --gemfile Gemfile.lock` | Observe gems from a Bundler lockfile |
 | `bonebed run -- COMMAND ARGS...` | Observe an explicit command without an implicit shell |
@@ -112,7 +116,7 @@ read-only image, drops capabilities, and sets container process, memory, and CPU
 | `bonebed monitor --file watchlist.txt` | Observe new stable releases and refresh a local dataset |
 | `bonebed static PATH --manifest FILE` | Scan Ruby source with optional Prism and relate hints to recorded capabilities |
 
-Use `bonebed help` for the command list and `bonebed dig --help` for observation options. `dig --version VERSION` selects the gem version. The `all` phase also observes a RubyGems plugin when the package declares one, so it can produce three linked manifests.
+Use `bonebed help` for the command list and `bonebed dig --help` for observation options. `dig --version VERSION` selects the gem version. The `all` phase also observes declared RubyGems and Bundler plugins, so it can produce four linked manifests. [Bundler plugin observations](docs/bundler-plugin-observation.md) include registration and any dependency installation or code loading performed by Bundler.
 
 Optional [Bash, Zsh, and Fish completion files](docs/completions.md) are included under `contrib/`.
 
@@ -120,9 +124,24 @@ Optional [Bash, Zsh, and Fish completion files](docs/completions.md) are include
 
 Successful survey results are matched by manifest identity and execution settings; failed or incomplete results are retried. `--jobs N` runs isolated workers in parallel. Killed workers are recorded and the survey continues. Process cleanup tracks descendants and can recover detached children, but an entirely unobserved fork/reparent race remains possible without a delegated cgroup.
 
+`survey --top N` pages through RubyGems download statistics. To continue during a registry outage or
+page-format change, explicitly provide `--top-fallback reviewed-ranking.txt` (or set
+`defaults.top_fallback` in `.bonebed.yml`). The file is used only when the live source fails or runs out
+of names. Bonebed warns on stderr, replaces the entire requested list with its first N entries, and
+does not mix partial live results with the snapshot or claim it is the current ranking.
+
+Keep one gem name per line in ranking order, with optional `#` comments. Record the source URL,
+ranking basis, collection date, and reviewer in comments; refresh from the same RubyGems statistics
+pages, review changes, and commit the snapshot alongside your survey configuration. Names, duplicates,
+and the full file are checked before use; insufficient names or version/require columns are rejected.
+The snapshot is operator-reviewed input, not a bundled or automatically verified popularity list.
+Configured fallback files are ignored for `--file` and `--gemfile` surveys.
+
 Use `sinatra - sinatra/base` in a survey file to set a require path without pinning a version. Require paths are ignored during install surveys. Lockfile surveys support RubyGems sources; git and path sources are rejected with their gem names instead of substituting registry packages. Standalone require observations need the selected gem and its runtime dependencies installed already; use `--phase all` to observe a gem that is not installed. `dig --platform PLATFORM` selects the package platform.
 
 Both phases use disposable home, project, temporary, and gem directories. Inherited environment variables are cleared for target execution, with a small runtime environment supplied explicitly. Decoy credential files and environment tokens contain fake values; their appearance in captured output or arguments is recorded as a canary hit. Use `--real-home` or `--cwd DIR` only when deliberately testing access to your own files. These options expose the selected real directories to target code.
+
+`--sinkhole` requests local responses for observing network intent. It cannot be combined with `--offline` or `--trace`; failure to establish its network isolation prevents target execution. The option is available for `dig`, `survey`, `run`, `bundle`, `compare`, and `diff-lock`. Sinkhole observations and baselines use separate cache identities.
 
 Use `--env-profile ci` or `prod` to exercise environment-dependent behavior. `--writes-only` omits ordinary read observations; it cannot establish the absence of credential reads. `--trace PREFIX` writes decoded JSONL timelines with process identity and normalized arguments. Trace files can contain target-controlled sensitive data.
 
@@ -144,13 +163,23 @@ Targets also receive hard resource limits: 4 GiB address space, CPU time of time
 1024 file descriptors, and 256 MiB per regular output file. These are distinct from captured-output
 limits. The Ruby Session API accepts `resource_limits:` overrides; there are no corresponding CLI flags.
 
-`dig` prints a compact summary and manifest path. Target failures still produce a manifest. Observer errors are recorded separately and do not make a successful target fail unless `--strict` is enabled.
+`dig` prints a compact summary and manifest path. Target failures still produce a manifest. Observer
+errors are recorded separately. Fatal setup failures return exit 2; `--strict` also reports nonfatal
+observer errors when the target otherwise succeeds.
+
+The summary includes counts by default-rule severity. Color is used only on terminal stderr and is
+disabled by `NO_COLOR`. `--verbose` adds observer runtime, capture mode, syscall-count, and target-status
+diagnostics to stderr; stdout remains suitable for manifest paths or structured reports.
+Use `--require-container` to reject host target execution with exit 2. `--allow-host` explicitly overrides
+that requirement while retaining the host warning. These controls also accept boolean defaults named
+`verbose`, `require_container`, and `allow_host` in `.bonebed.yml`. Container detection is a preflight
+guard, not a security boundary; use a disposable environment with the documented isolation settings.
 
 | Exit status | Meaning |
 | --- | --- |
-| `0` | Successful command; observer errors are tolerated unless strict mode is enabled |
+| `0` | Successful command; nonfatal observer errors are tolerated unless strict mode is enabled |
 | `1` | Target command failed or timed out, or command setup/environment checks failed |
-| `2` | Observer errors with `--strict` and an otherwise successful target |
+| `2` | Fatal observation failure, or observer errors with `--strict` and an otherwise successful target |
 | `3` | Policy violations at or above the selected threshold |
 | `64` | Invalid arguments or command usage |
 
@@ -163,7 +192,7 @@ limits. The Ruby Session API accepts `resource_limits:` overrides; there are no 
 
 Captured output is stored as UTF-8; invalid byte sequences are replaced so binary output cannot prevent manifest creation. `target` records `exit_status`, `signal`, and `timed_out`; `errors` describes target failures and `observer_errors` describes observation failures. Reports show these separately along with network attempts and output emitted by successful require targets. Failure reports keep compact output previews in the table and captured output in a folded section.
 
-Schema v2 groups reads into the gem's own files, resolver configuration, and other paths. Reports begin with a capability matrix and support both v1 and v2 results. See [the manifest reference](docs/manifest.md) for fields, migration, and compatibility.
+Schema v2 groups reads into the gem's own files, resolver configuration, and other paths. Markdown reports include a contents list, findings ordered by default-policy severity, folded target details, and a capability matrix. Capabilities without a matching rule have no assigned severity. Reports support both v1 and v2 results. See [the manifest reference](docs/manifest.md) for fields, migration, and compatibility.
 
 Observation policies in `.bonebed.yml` classify findings after execution; they do not prevent target actions. `--enforce FILE` loads a separate Landlock configuration before execution and can be combined with `--offline`. See [policies and enforcement](docs/policies.md) for both formats and their limits, [CI integration](docs/ci.md) for the composite Action, and [datasets](docs/dataset.md) for local export and monitoring.
 

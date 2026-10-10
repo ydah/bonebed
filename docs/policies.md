@@ -15,6 +15,7 @@ Severities are `info`, `low`, `medium`, `high`, and `critical`.
 version: 1
 defaults:
   fail_on: high
+  require_container: true
 rules:
   extends: default
   disable: []
@@ -29,10 +30,21 @@ remain visible but do not fail checks. `rules.custom` accepts full rule objects 
 `severity`, and a nonempty `match` array, with optional `phase`, `message`, and HTTPS references.
 A custom rule can replace a default rule with the same ID. Unknown configuration fields, severities,
 and disabled rule IDs are rejected. YAML object deserialization and aliases are disabled.
+The boolean CLI defaults `require_container`, `allow_host`, and `verbose` control host-execution checks
+and diagnostics. An explicit `--allow-host` overrides a configured container requirement.
+`defaults.top_fallback` accepts a nonempty path to an operator-reviewed, ranked gem-name list used only
+when a `survey --top` lookup fails. `--top-fallback FILE` overrides that path; snapshot validation and
+update instructions are described in the README.
 
 `check` accepts `--format md|json|csv|html|sarif`. Use `--gemfile Gemfile.lock` to locate SARIF results
 on matching lockfile entries. `--strict` fails on observer errors before treating a policy result as
 successful. Target failures remain failures regardless of whether policy findings are approved.
+
+`diff`, `compare`, `diff-lock`, and `history` classify changed capabilities with the default rules
+for their observed phase. JSON preserves the `added` and `removed` key arrays and includes `findings`
+for additions and `removed_findings` for removals. Markdown displays their severities; SARIF includes
+only additions, using the same rule IDs and levels. Capabilities without a matching rule are labeled
+`unclassified-capability` at `info`; this is not a safety verdict. Counts alone do not create findings.
 
 ## Capability approval lock
 

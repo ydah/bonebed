@@ -3,6 +3,23 @@
 require "bonebed/cli"
 
 RSpec.describe Bonebed::Report do
+  it "does not count fatal observer failures or status-only target failures as successes" do
+    Dir.mktmpdir do |directory|
+      base = {gem: {name: "observer", version: "1"}, phase: "require", errors: [],
+              files: {read: [], write: []}, network: [], exec: [], stats: {}, stdout: "diagnostic"}
+      File.write(File.join(directory, "observer.json"), JSON.generate(base.merge(
+        failure_reason: "observation_failed", observer_errors: ["namespace setup failed"], target: {exit_status: nil}
+      )))
+      File.write(File.join(directory, "target.json"), JSON.generate(base.merge(
+        gem: {name: "target", version: "1"}, target: {exit_status: 7}
+      )))
+      expect(described_class.summary(directory)).to include("successful" => 0, "target_failures" => 1, "observer_failures" => 1)
+      markdown = described_class.new(directory).markdown
+      expect(markdown).to include("- Successful: 0", "- With errors: 2", "target exited with status 7")
+      expect(markdown).to include("## Output from successful require targets\n\nNone observed.")
+    end
+  end
+
   it "aggregates a streaming summary and keeps unknown capabilities separate from false" do
     Dir.mktmpdir do |directory|
       manifest = {gem: {name: "demo", version: "1"}, phase: "require", errors: [],

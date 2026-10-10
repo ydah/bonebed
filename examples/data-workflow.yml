@@ -6,8 +6,7 @@ on:
   schedule:
     - cron: '17 4 * * 1'
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: bonebed-dataset
@@ -17,6 +16,10 @@ jobs:
   survey:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -43,6 +46,7 @@ jobs:
           printf '%s\n' "$DATA_IMAGE" > "$RUNNER_TEMP/observations/image.txt"
           docker pull "$DATA_IMAGE"
       - name: Observe and export without repository credentials
+        id: observation
         shell: bash
         run: |
           run_image() {
@@ -58,7 +62,13 @@ jobs:
           run_image survey --file /work/names.txt --phase all --offline --quiet-target --results /work/results || status=$?
           run_image dataset /work/results --output /work/site
           tar -czf "$RUNNER_TEMP/bonebed-shard-$SHARD.tar.gz" -C "$RUNNER_TEMP/observations" .
+          printf 'archive=true\n' >> "$GITHUB_OUTPUT"
           exit "$status"
+      - name: Attest the observation archive
+        if: always() && steps.observation.outputs.archive == 'true'
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ runner.temp }}/bonebed-shard-${{ matrix.shard }}.tar.gz
       - name: Retain compressed observations for review
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

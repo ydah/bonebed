@@ -1,0 +1,106 @@
+{
+  "schema_version": 2,
+  "tool": {
+    "name": "bonebed",
+    "version": "<bonebed-version>",
+    "seccomp_notify": "<seccomp-notify-version>"
+  },
+  "run": {
+    "id": "golden-quiet",
+    "started_at": "2026-01-02T03:04:05Z",
+    "mode": {
+      "offline": false,
+      "honeypot": true,
+      "env_profile": "dev",
+      "writes_only": false,
+      "real_home": false,
+      "cwd": null,
+      "enforce": null,
+      "repeat": 1,
+      "isolation": "none"
+    }
+  },
+  "started_at": "2026-01-02T03:04:05Z",
+  "gem": {
+    "name": "golden",
+    "version": "1.2.3",
+    "platform": "ruby",
+    "require_path": "golden",
+    "sha256": "ae97f0e5480e426428f68e63ecb0b661c60cee227bba7abe72950c3931ba163b",
+    "extensions": [],
+    "executables": [],
+    "required_ruby_version": ">= 3.2",
+    "post_install_message": null,
+    "rubygems_plugin": false,
+    "bundler_plugin": false
+  },
+  "phase": "require",
+  "environment": {
+    "ruby": "<ruby>",
+    "arch": "<arch>",
+    "kernel": "<kernel>",
+    "baseline_id": "golden-baseline-v1",
+    "cleanup": {
+      "mode": "cgroup_v2",
+      "completed": true,
+      "limitation": "same-UID cgroup controls are not a security boundary"
+    }
+  },
+  "target": {
+    "exit_status": 0,
+    "signal": null,
+    "timed_out": false
+  },
+  "files": {
+    "read": {
+      "self": [
+        "$GEM_HOME/gems/golden-1.2.3/lib/golden.rb"
+      ],
+      "resolver": [],
+      "other": []
+    },
+    "write": [],
+    "notable": []
+  },
+  "network": [],
+  "network_intent": [],
+  "exec": [],
+  "threads": [],
+  "stats": {
+    "notify_roundtrips": 6,
+    "wall_ms": 0,
+    "open_total": 4,
+    "open_after_baseline": 1
+  },
+  "dependencies": [],
+  "errors": [],
+  "observer_errors": [],
+  "stdout": "",
+  "stderr": "",
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "canary_hits": [],
+  "findings": [],
+  "process_tree": [],
+  "processes": [],
+  "listen": [],
+  "sockets": [],
+  "suspicious": [],
+  "dns": [],
+  "anti_analysis": [],
+  "capabilities": {
+    "network": false,
+    "dns": false,
+    "exec": false,
+    "process": false,
+    "threads": false,
+    "home_read": false,
+    "home_write": false,
+    "project_write": false,
+    "sensitive_read": false,
+    "native_extension": false,
+    "plugin": false,
+    "suspicious_syscalls": false,
+    "anti_analysis": false
+  }
+}

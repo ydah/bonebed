@@ -16,7 +16,7 @@ module Bonebed
       raise ArgumentError, "manifest files must be an object" unless files.is_a?(Hash)
 
       files.each do |mode, entries|
-        next if mode == "notable"
+        next if %w[notable self_write].include?(mode)
 
         entries = entries.values.flat_map { |paths| list(paths) } if mode == "read" && entries.is_a?(Hash)
         list(entries).each do |entry|
@@ -42,6 +42,12 @@ module Bonebed
         name = entry.is_a?(Hash) ? entry.fetch("name") : entry
         result["network:dns:#{text(name)}"] += count(entry)
       end
+      list(manifest.fetch("network_intent", [])).each do |entry|
+        protocol = entry.fetch("protocol")
+        raise ArgumentError, "invalid network intent protocol" unless %w[http tls].include?(protocol)
+
+        result["network:#{protocol}:#{text(entry.fetch("host"))}"] += count(entry)
+      end
       list(manifest.fetch("exec", [])).each do |entry|
         result["exec:#{text(entry.fetch("path"))}"] += count(entry)
         result["syscall:execveat"] += count(entry) if entry["syscall"] == "execveat"
@@ -56,6 +62,10 @@ module Bonebed
       list(manifest.fetch("anti_analysis", [])).each do |entry|
         value = entry.is_a?(Hash) ? entry.fetch("path") { entry.fetch("syscall") } : entry
         result["anti_analysis:#{text(value)}"] += count(entry)
+      end
+      list(manifest.fetch("denied", [])).each do |entry|
+        key = text(entry.fetch("capability"))
+        result[key] = [result[key], count(entry)].max
       end
       result.sort.to_h
     rescue KeyError, NoMethodError, TypeError => error

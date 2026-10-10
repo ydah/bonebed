@@ -7,7 +7,7 @@ require_relative "capability_keys"
 module Bonebed
   class Policy
     SEVERITIES = %w[info low medium high critical].freeze
-    PHASES = %w[install require plugin exec all *].freeze
+    PHASES = %w[install require plugin bundler_plugin exec all *].freeze
     DEFAULT_RULES = File.expand_path("rules/default.yml", __dir__)
     attr_reader :defaults, :rules
 
@@ -25,11 +25,15 @@ module Bonebed
       mapping!(config, %w[version defaults rules allow], "policy")
       raise ArgumentError, "policy version must be 1" unless config.fetch("version", 1) == 1
 
-      @defaults = {"fail_on" => "high"}.merge(mapping!(config.fetch("defaults", {}), %w[phase env_profile offline fail_on], "defaults"))
+      @defaults = {"fail_on" => "high"}.merge(mapping!(config.fetch("defaults", {}), %w[phase env_profile offline fail_on verbose require_container allow_host top_fallback], "defaults"))
       severity!(@defaults.fetch("fail_on"))
       raise ArgumentError, "invalid default phase" if @defaults.key?("phase") && !PHASES.include?(@defaults["phase"])
       raise ArgumentError, "invalid environment profile" if @defaults.key?("env_profile") && !%w[ci dev prod].include?(@defaults["env_profile"])
       raise ArgumentError, "offline must be boolean" if @defaults.key?("offline") && ![true, false].include?(@defaults["offline"])
+      string!(@defaults["top_fallback"], "top_fallback") if @defaults.key?("top_fallback")
+      %w[verbose require_container allow_host].each do |key|
+        raise ArgumentError, "#{key} must be boolean" if @defaults.key?(key) && ![true, false].include?(@defaults[key])
+      end
 
       configuration = mapping!(config.fetch("rules", {}), %w[extends disable custom], "rules")
       raise ArgumentError, "rules extends must be default" unless configuration.fetch("extends", "default") == "default"
@@ -56,12 +60,11 @@ module Bonebed
       end
     end
 
-    def findings(manifest)
+    def findings(manifest, keys: CapabilityKeys.call(manifest))
       name = string!(manifest.dig("gem", "name"), "manifest gem name")
       phase = string!(manifest["phase"], "manifest phase")
       raise ArgumentError, "invalid manifest phase" unless (PHASES - %w[all *]).include?(phase)
 
-      keys = CapabilityKeys.call(manifest)
       @rules.flat_map do |rule|
         next [] if rule["phase"] && !(rule["phase"] & [phase, "all", "*"]).any?
 

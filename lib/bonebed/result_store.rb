@@ -3,13 +3,14 @@
 require "digest"
 require "fileutils"
 require "json"
+require "rbconfig"
 require "tempfile"
 require_relative "sensitive_path"
 
 module Bonebed
   class ResultStore
     COMPONENT = /\A[0-9A-Za-z][0-9A-Za-z._-]*\z/
-    MODE_KEYS = %w[offline honeypot env_profile writes_only real_home cwd enforce repeat].freeze
+    MODE_KEYS = %w[offline sinkhole honeypot env_profile writes_only real_home cwd enforce deny repeat].freeze
 
     def initialize(directory)
       @directory = directory
@@ -44,7 +45,11 @@ module Bonebed
           (!mode || self.class.mode_identity(manifest.dig("run", "mode")) == self.class.mode_identity(mode)) &&
           (!executable || manifest.dig("run", "executable") == executable) &&
           (!arguments || manifest.dig("run", "arguments") == arguments) &&
+          [nil, RUBY_VERSION].include?(manifest.dig("environment", "ruby")) &&
+          [nil, RbConfig::CONFIG.fetch("host_cpu")].include?(manifest.dig("environment", "arch")) &&
+          (phase != "bundler_plugin" || manifest.dig("environment", "bundler") == Gem.loaded_specs["bundler"]&.version&.to_s) &&
           manifest.fetch("errors").empty? &&
+          manifest["failure_reason"] != "observation_failed" &&
           !manifest.dig("target", "timed_out") && !manifest.dig("target", "signal") &&
           [nil, 0].include?(manifest.dig("target", "exit_status"))
       end
@@ -95,13 +100,14 @@ module Bonebed
     end
 
     def self.mode_identity(mode)
-      {"repeat" => 1}.merge((mode || {}).transform_keys(&:to_s)).values_at(*MODE_KEYS)
+      {"repeat" => 1, "sinkhole" => false}.merge((mode || {}).transform_keys(&:to_s)).values_at(*MODE_KEYS)
     end
 
     def self.identity(manifest)
       [manifest["phase"], *manifest.fetch("gem").values_at("name", "version", "platform", "require_path"),
         mode_identity(manifest.dig("run", "mode")), manifest["command"], manifest.dig("run", "repeat")&.values_at("group", "index"),
-        manifest.dig("run", "executable"), manifest.dig("run", "arguments"), manifest["bundle"]]
+        manifest.dig("run", "executable"), manifest.dig("run", "arguments"), manifest["bundle"],
+        manifest.dig("environment", "ruby"), manifest.dig("environment", "arch"), manifest.dig("environment", "bundler")]
     end
 
     def self.paths(directory)
@@ -123,13 +129,18 @@ module Bonebed
       return false unless %w[name version].all? { |key| gem[key].is_a?(String) && COMPONENT.match?(gem[key]) }
       return false if !gem["platform"].nil? && !(gem["platform"].is_a?(String) && COMPONENT.match?(gem["platform"]))
       return false unless gem["require_path"].nil? || gem["require_path"].is_a?(String)
-      return false unless %w[install require plugin exec].include?(manifest["phase"])
+      return false unless %w[install require plugin bundler_plugin exec].include?(manifest["phase"])
       return false unless manifest["errors"].is_a?(Array) && manifest["errors"].all? { |error| error.is_a?(String) }
       return false unless valid_run?(manifest["run"])
+      environment = manifest["environment"]
+      if !environment.nil? && (!environment.is_a?(Hash) || %w[ruby arch bundler].any? { |key| !environment[key].nil? && !environment[key].is_a?(String) })
+        return false
+      end
       return false if manifest.key?("command") && !(manifest["command"].is_a?(Array) && !manifest["command"].empty? && manifest["command"].all? { |arg| arg.is_a?(String) })
 
       files = manifest["files"]
       return false unless files.is_a?(Hash) && files["write"].is_a?(Array)
+      return false if files.key?("self_write") && !(files["self_write"].is_a?(Array) && (files["self_write"] - files["write"]).empty?)
 
       read = files["read"]
       if manifest["schema_version"] == 2
@@ -137,7 +148,7 @@ module Bonebed
         read = read.values.flatten
       end
       read.is_a?(Array) && (read + files["write"]).all? { |path| path.is_a?(String) } &&
-        %w[network exec threads].all? { |key| !manifest.key?(key) || (manifest[key].is_a?(Array) && manifest[key].all? { |entry| valid_event?(key, entry) }) } &&
+        %w[network network_intent exec threads denied].all? { |key| !manifest.key?(key) || (manifest[key].is_a?(Array) && manifest[key].all? { |entry| valid_event?(key, entry) }) } &&
         (!manifest.key?("stats") || manifest["stats"].is_a?(Hash)) &&
         (manifest["target"].nil? || manifest["target"].is_a?(Hash)) &&
         %w[stdout stderr].all? { |key| !manifest.key?(key) || manifest[key].is_a?(String) } &&
@@ -160,8 +171,9 @@ module Bonebed
       return true if mode.nil?
       return false unless mode.is_a?(Hash)
 
-      %w[offline honeypot writes_only real_home].all? { |key| [nil, true, false].include?(mode[key]) } &&
-        %w[env_profile cwd enforce].all? { |key| mode[key].nil? || mode[key].is_a?(String) } &&
+      (!mode.key?("sinkhole") || [true, false].include?(mode["sinkhole"])) &&
+        %w[offline honeypot writes_only real_home].all? { |key| [nil, true, false].include?(mode[key]) } &&
+        %w[env_profile cwd enforce deny].all? { |key| mode[key].nil? || mode[key].is_a?(String) } &&
         (!mode.key?("repeat") || (mode["repeat"].is_a?(Integer) && (1..100).cover?(mode["repeat"])))
     end
     private_class_method :valid_run?
@@ -171,12 +183,19 @@ module Bonebed
       return false if entry.key?("count") && !(entry["count"].is_a?(Integer) && entry["count"].positive?)
 
       case kind
+      when "denied"
+        entry["count"].is_a?(Integer) && entry["count"].positive? &&
+          %w[syscall capability rule_id].all? { |field| entry[field].is_a?(String) && !entry[field].empty? } &&
+          %w[info low medium high critical].include?(entry["severity"])
       when "network"
         return false unless entry["family"].is_a?(String)
         return entry["path"].is_a?(String) if entry["family"] == "unix"
         return true unless %w[inet inet6].include?(entry["family"])
 
         entry["addr"].is_a?(String) && entry["port"].is_a?(Integer) && (0..65_535).cover?(entry["port"])
+      when "network_intent"
+        %w[http tls].include?(entry["protocol"]) && entry["host"].is_a?(String) && !entry["host"].empty? &&
+          %w[path method sample].all? { |key| !entry.key?(key) || entry[key].is_a?(String) }
       when "exec"
         entry["path"].is_a?(String) && (!entry.key?("argv") || (entry["argv"].is_a?(Array) && entry["argv"].all? { |value| value.is_a?(String) }))
       when "threads"
@@ -193,7 +212,7 @@ module Bonebed
       gem = manifest.fetch("gem", {})
       sensitive = SensitivePath::ABSOLUTE + SensitivePath::HOME.map { |path| "$HOME/#{path}" } + SensitivePath::PROJECT.map { |path| "$PWD/#{path}" }
       {
-        "network" => !Array(manifest["network"]).empty?, "dns" => manifest["dns"] && !manifest["dns"].empty?,
+        "network" => !Array(manifest["network"]).empty? || !Array(manifest["network_intent"]).empty?, "dns" => manifest["dns"] && !manifest["dns"].empty?,
         "exec" => !Array(manifest["exec"]).empty?, "process" => manifest["processes"] && !manifest["processes"].empty?,
         "threads" => !Array(manifest["threads"]).empty?,
         "home_read" => read.any? { |path| path.start_with?("$HOME/") },
@@ -201,7 +220,7 @@ module Bonebed
         "project_write" => write.any? { |path| path.start_with?("$PWD/") },
         "sensitive_read" => read.any? { |path| sensitive.any? { |pattern| File.fnmatch?(pattern, path, SensitivePath::FLAGS) } },
         "native_extension" => gem["extensions"] && !gem["extensions"].empty?,
-        "plugin" => gem["rubygems_plugin"],
+        "plugin" => gem["rubygems_plugin"] || gem.fetch("bundler_plugin", gem["rubygems_plugin"]),
         "suspicious_syscalls" => manifest["suspicious"] && !manifest["suspicious"].empty?,
         "anti_analysis" => manifest["anti_analysis"] && !manifest["anti_analysis"].empty?
       }
@@ -214,7 +233,7 @@ module Bonebed
       data["run"] = {"id" => "migrated-#{Digest::SHA256.hexdigest(JSON.generate(manifest))}",
                      "started_at" => data.delete("started_at"), "mode" => {"offline" => nil, "honeypot" => nil}}
       data["target"] ||= {"exit_status" => nil, "signal" => nil, "timed_out" => nil}
-      %w[platform require_path sha256 extensions executables rubygems_plugin].each { |key| data["gem"][key] = nil unless data["gem"].key?(key) }
+      %w[platform require_path sha256 extensions executables rubygems_plugin bundler_plugin].each { |key| data["gem"][key] = nil unless data["gem"].key?(key) }
       %w[observer_errors dependencies canary_hits stdout_truncated stderr_truncated].each { |key| data[key] = nil unless data.key?(key) }
       data["files"]["read"] = {"self" => [], "resolver" => [], "other" => data["files"].fetch("read")}
       data["stats"] ||= {}

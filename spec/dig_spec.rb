@@ -103,7 +103,7 @@ RSpec.describe Bonebed::Dig do
       manifest = {gem: {name: "demo", version: "1"}, phase: "require", files: {read: [], write: []}, errors: [], run: {mode: dig.observation_mode}}
       File.write(File.join(results, "result.json"), JSON.generate(manifest))
       expect(dig.result_exists?("demo", phase: "require")).to be(true)
-      [{enforce: nil}, {offline: true}, {env_profile: "ci"}, {writes_only: true}, {real_home: true}, {cwd: results}].each do |options|
+      [{enforce: nil}, {offline: true}, {sinkhole: true}, {env_profile: "ci"}, {writes_only: true}, {real_home: true}, {cwd: results}].each do |options|
         expect(described_class.new(results_dir: results, enforce: policy, **options).result_exists?("demo", phase: "require")).to be(false)
       end
       File.write(policy, "read_paths: []\n")

@@ -77,6 +77,9 @@
                     "null"
                   ]
                 },
+                "sinkhole": {
+                  "type": "boolean"
+                },
                 "honeypot": {
                   "type": [
                     "boolean",
@@ -103,6 +106,9 @@
                     "string",
                     "null"
                   ]
+                },
+                "deny": {
+                  "type": ["string", "null"]
                 },
                 "repeat": {
                   "type": "integer",
@@ -205,6 +211,9 @@
             "null"
           ]
         },
+        "bundler_plugin": {
+          "type": ["boolean", "null"]
+        },
         "required_ruby_version": {
           "type": [
             "string",
@@ -228,6 +237,7 @@
         "install",
         "require",
         "plugin",
+        "bundler_plugin",
         "exec"
       ]
     },
@@ -244,6 +254,9 @@
                 "string",
                 "null"
               ]
+            },
+            "bundler": {
+              "type": ["string", "null"]
             },
             "arch": {
               "type": [
@@ -424,6 +437,11 @@
           "items": {
             "type": "string"
           }
+        },
+        "self_write": {
+          "type": "array",
+          "description": "Subset of write paths inside the selected gem's directory.",
+          "items": { "type": "string" }
         },
         "notable": {
           "type": "array",
@@ -663,6 +681,35 @@
         "required": [
           "family"
         ]
+      }
+    },
+    "denied": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["syscall", "capability", "rule_id", "severity", "count"],
+        "properties": {
+          "syscall": {"type": "string", "minLength": 1},
+          "capability": {"type": "string", "minLength": 1},
+          "rule_id": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
+          "count": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "network_intent": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["protocol", "host"],
+        "properties": {
+          "protocol": {"enum": ["http", "tls"]},
+          "host": {"type": "string", "minLength": 1},
+          "path": {"type": "string"},
+          "method": {"type": "string"},
+          "sample": {"type": "string"},
+          "count": {"type": "integer", "minimum": 1}
+        }
       }
     },
     "exec": {
@@ -964,6 +1011,16 @@
           "path"
         ],
         "properties": {
+          "cwd": { "type": ["string", "null"] },
+          "attribution": {
+            "type": "object",
+            "required": ["gem", "version", "source"],
+            "properties": {
+              "gem": { "type": "string" },
+              "version": { "type": "string" },
+              "source": { "const": "cwd" }
+            }
+          },
           "pid": {
             "type": "integer"
           },

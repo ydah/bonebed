@@ -90,6 +90,34 @@ RSpec.describe Bonebed::BundleRunner do
     expect(File).not_to exist(marker)
   end
 
+  it "refuses matching Gemfile operations using the aggregate bundle identity" do
+    skip "Linux seccomp required" unless RUBY_PLATFORM.include?("linux")
+    write_inputs('begin; File.write("blocked", "bad"); rescue Errno::EPERM; puts "fixture denied"; end')
+    package = build_package
+    policy = File.join(@root, "deny.yml")
+    File.write(policy, {"rules" => {"custom" => [{"id" => "fixture-write", "severity" => "high", "match" => ["file:write:$PWD/blocked"]}]}}.to_yaml)
+    runner = described_class.new(results_dir: File.join(@root, "results"), deny: policy, quiet_target: true,
+      prefetcher: double("prefetcher", call: [package]))
+    manifest = JSON.parse(File.read(runner.run(gemfile: @gemfile)))
+    expect(manifest.fetch("errors")).to be_empty
+    expect(manifest.fetch("observer_errors")).to be_empty
+    expect(manifest.fetch("denied")).to include(include("capability" => "file:write:$PWD/blocked", "rule_id" => "fixture-write"))
+    expect(manifest.dig("run", "mode", "deny")).to match(/\A[0-9a-f]{64}\z/)
+    expect { described_class.new(deny: policy, writes_only: true) }.to raise_error(ArgumentError, /writes.only/)
+  end
+
+  it "passes sinkhole to both bundle baseline and target sessions" do
+    write_inputs
+    package = build_package
+    expect(Bonebed::Session).to receive(:new).with(anything, hash_including(sinkhole: true, offline: false))
+      .twice.and_return(double(run: Bonebed::Collector.new))
+    runner = described_class.new(results_dir: File.join(@root, "results"), sinkhole: true,
+      prefetcher: double("prefetcher", call: [package]))
+    manifest = JSON.parse(File.read(runner.run(gemfile: @gemfile)))
+    expect(manifest.fetch("errors")).to be_empty
+    expect(manifest.dig("run", "mode", "sinkhole")).to be(true)
+  end
+
   it "uses the verified stdlib Bundler when its default gem directory is absent" do
     skip "Linux seccomp required" unless RUBY_PLATFORM.include?("linux")
     source = Bundler.method(:root).source_location.first
@@ -121,6 +149,37 @@ RSpec.describe Bonebed::BundleRunner do
       allow(Bundler).to receive(:method).with(:root).and_return(double(source_location: [File.join(@root, "unverified.rb"), 1]))
       expect { runner.send(:configure, environment) }.to raise_error(Bonebed::Error, /Bundler runtime/)
     end
+  end
+
+  it "uses verified stdlib Bundler for a specification synthesized by Bundler metadata" do
+    source = Bundler.method(:root).source_location.first
+    standard_library = File.join(RbConfig::CONFIG.fetch("rubylibdir"), "bundler.rb")
+    skip "the active Bundler is installed separately from Ruby" unless File.identical?(source, standard_library)
+
+    loaded = Gem.loaded_specs.dup
+    loaded.delete("bundler")
+    allow(Gem).to receive(:loaded_specs).and_return(loaded)
+    metadata = Bundler::Source::Metadata.new
+    metadata.specs.each { |spec| loaded["bundler"] = spec if spec.name == "bundler" }
+    specification = loaded.fetch("bundler")
+    if specification.default_gem?
+      # Bundler 4 finds the installed default spec; reproduce Bundler 2's metadata layout.
+      specification = Gem::Specification.new("bundler", Bundler::VERSION)
+      specification.loaded_from = File.join(RbConfig::CONFIG.fetch("rubylibdir"), "bundler", "source")
+      specification.source = metadata
+      loaded["bundler"] = specification
+    end
+    expect(specification.default_gem?).to be(false)
+    expect(File).not_to be_directory(specification.full_gem_path)
+    expect(specification.loaded_from).to eq(File.join(RbConfig::CONFIG.fetch("rubylibdir"), "bundler", "source"))
+
+    write_inputs
+    package = build_package
+    runner = described_class.new(results_dir: File.join(@root, "results"), quiet_target: true,
+      prefetcher: double("prefetcher", call: [package]))
+    manifest = JSON.parse(File.read(runner.run(gemfile: @gemfile)))
+    expect(manifest.fetch("errors")).to be_empty
+    expect(manifest.dig("target", "exit_status")).to eq(0)
   end
 
   it "copies the active Bundler without resolving a different same-version default specification" do

@@ -13,7 +13,7 @@ module Bonebed
         raise ArgumentError, "invalid capability lock gem" unless valid
 
         entry.fetch("phases").each do |phase, keys|
-          raise ArgumentError, "invalid capability lock phase" unless %w[install require plugin exec].include?(phase) && keys.is_a?(Array) && keys.all? { |key| key.is_a?(String) && !key.empty? }
+          raise ArgumentError, "invalid capability lock phase" unless %w[install require plugin bundler_plugin exec].include?(phase) && keys.is_a?(Array) && keys.all? { |key| key.is_a?(String) && !key.empty? }
         end
       end
       data

@@ -38,3 +38,22 @@ blocked native builds/loads; the checked-in launchers now explicitly use `exec` 
 Reproduce with a fresh results directory using the command in the nightly workflow. Current registry
 versions and rankings may differ; use a version-pinned survey input to compare these exact releases.
 Hosted CI, other kernels, and the eventual published image need their own verification.
+
+## Container and runtime comparison smoke test, October 10, 2026
+
+The updated production Dockerfile built successfully with Ruby 4.0.6 and the locally cached official
+Ruby 3.3 image (Ruby 3.3.12). Both ran an explicit Ruby command with a project-file write under an
+unprivileged UID, read-only root filesystem, all capabilities dropped, no-new-privileges, the bundled
+seccomp profile, resource limits, and a private executable tmpfs. Both saved successful manifests with
+empty target and observer errors. The actual `--ruby 3.3,4.0` wrapper ran both local images, kept their
+output separate, checked runtime metadata, and reported no capability differences for that command.
+
+The same restricted configuration supported a real sinkhole namespace. With Docker's default
+seccomp profile instead, namespace creation was refused; the command returned exit 2 and the target's
+marker file was not created. These are separate supported/blocked setup checks, not proof of complete
+hostile-code containment.
+
+Docker Hub's API confirmed amd64 and arm64 variants for the pinned Ruby 3.3/3.4 release-workflow base
+digests. Pulling the new Ruby 3.3 digest locally timed out during the registry TLS handshake, so the
+Ruby 3.3 build above used its existing local base image. Release-image publishing and a build of that
+exact newer base digest remain separate checks.

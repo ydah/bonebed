@@ -84,6 +84,7 @@ module Bonebed
         .filter_map do |(version, _platform), manifests|
         phases = %w[install require]
         phases << "plugin" if manifests.any? { |manifest| manifest.dig("gem", "rubygems_plugin") }
+        phases << "bundler_plugin" if manifests.any? { |manifest| manifest.dig("gem", "bundler_plugin") }
         version if (phases - manifests.map { |manifest| manifest.fetch("phase") }).empty? && @dig.result_exists?(name, phase: "all", version:)
       end.uniq
     end

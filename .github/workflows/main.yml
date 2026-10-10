@@ -40,33 +40,6 @@ jobs:
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
-      - name: Diagnose Ruby 3.3 Bundler layout
-        if: matrix.ruby == '3.3'
-        run: |
-          bundle exec ruby <<'RUBY'
-          require "bundler"
-          require "json"
-          require "rbconfig"
-          describe = lambda do |stage|
-            spec = Gem.loaded_specs.fetch("bundler")
-            puts JSON.pretty_generate(
-              stage: stage, version: Bundler::VERSION,
-              source: Bundler.method(:root).source_location,
-              loaded_features: $LOADED_FEATURES.grep(%r{/bundler\.rb$}),
-              default_gem: spec.default_gem?,
-              full_gem_path: spec.full_gem_path,
-              gem_directory_exists: File.directory?(spec.full_gem_path),
-              loaded_from: spec.loaded_from, base_dir: spec.base_dir,
-              rubylibdir: RbConfig::CONFIG.fetch("rubylibdir")
-            )
-          end
-          describe.call("bundle exec")
-          Bundler.with_unbundled_env do
-            Bundler.reset!
-            Gem::Specification.reset
-            describe.call("after observation environment reset")
-          end
-          RUBY
       - name: Run the default task
         env:
           BONEBED_COVERAGE_MIN: '85'

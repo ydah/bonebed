@@ -6,6 +6,7 @@ require "securerandom"
 require "time"
 require "uri"
 require_relative "baseline"
+require_relative "bundler_runtime"
 require_relative "enforcement"
 require_relative "gem_environment"
 require_relative "manifest_builder"
@@ -17,9 +18,13 @@ module Bonebed
   class BundleRunner
     attr_reader :last_errors, :last_observer_errors
 
-    def initialize(results_dir: "results", timeout: 600, offline: false, env_profile: "dev", writes_only: false,
-      trace: nil, enforce: nil, quiet_target: false, output_limit: Session::OUTPUT_LIMIT, argv_limit: 64,
+    def initialize(results_dir: "results", timeout: 600, offline: false, sinkhole: false, env_profile: "dev", writes_only: false,
+      trace: nil, enforce: nil, deny: nil, quiet_target: false, output_limit: Session::OUTPUT_LIMIT, argv_limit: 64,
       cwd: nil, real_home: false, prefetcher: Prefetcher.new)
+      raise ArgumentError, "sinkhole must be a boolean" unless [true, false].include?(sinkhole)
+      raise ArgumentError, "offline and sinkhole cannot be combined" if offline && sinkhole
+      raise ArgumentError, "trace is unsupported with sinkhole" if sinkhole && trace
+      raise ArgumentError, "deny is incompatible with writes-only capture" if deny && writes_only
       raise ArgumentError, "timeout must be positive" unless timeout.is_a?(Numeric) && timeout.positive?
       raise ArgumentError, "invalid environment profile" unless %w[dev ci prod].include?(env_profile)
       raise ArgumentError, "output limit must be nonnegative" unless output_limit.is_a?(Integer) && output_limit >= 0
@@ -31,21 +36,24 @@ module Bonebed
       @real_home = real_home
       @env_profile = env_profile
       @enforce = enforce
+      @deny = DenyPolicy.load(deny) if deny
       @trace = trace
-      @session_options = {timeout:, offline:, writes_only:, quiet_target:, output_limit:, argv_limit:, target_stdout: $stderr}
+      @session_options = {timeout:, offline:, sinkhole:, writes_only:, quiet_target:, output_limit:, argv_limit:, target_stdout: $stderr}
       @last_errors = []
       @last_observer_errors = []
     end
 
     def run(gemfile: "Gemfile", lockfile: nil)
+      @fatal_observer_error = false
       @last_errors = []
       @last_observer_errors = []
       @bundle = {}
       @run = nil
       @run = {"id" => SecureRandom.uuid, "kind" => "bundle", "started_at" => Time.now.utc.iso8601,
-              "mode" => @session_options.slice(:offline, :writes_only).transform_keys(&:to_s).merge(
+              "mode" => @session_options.slice(:offline, :sinkhole, :writes_only).transform_keys(&:to_s).merge(
                 "env_profile" => @env_profile, "honeypot" => true, "real_home" => @real_home, "cwd" => @cwd,
-                "enforce" => @enforce && Digest::SHA256.file(@enforce).hexdigest
+                "enforce" => @enforce && Digest::SHA256.file(@enforce).hexdigest,
+                "deny" => @deny && DenyPolicy.digest(@deny)
               )}
       gemfile = File.expand_path(gemfile, @cwd || Dir.pwd)
       lockfile = lockfile ? File.expand_path(lockfile, @cwd || Dir.pwd) : "#{gemfile}.lock"
@@ -74,12 +82,26 @@ module Bonebed
         save(environment.honeypot.redact(manifest))
       end
     rescue => error
-      manifest = ManifestBuilder.call("bundle", "0", "install", empty_observation(error),
+      @fatal_observer_error = error.is_a?(ObserverError)
+      observation = empty_observation(error)
+      if @fatal_observer_error
+        observation[:observer_errors] = observation[:errors]
+        observation[:errors] = []
+      end
+      manifest = ManifestBuilder.call("bundle", "0", "install", observation,
         Baseline::Result.new(id: nil, observation: empty_observation), run: @run)
       manifest["command"] = command
       manifest["bundle"] = @bundle
-      manifest["failure_reason"] = error.is_a?(Prefetcher::Error) ? "prefetch_failed" : "setup_failed"
+      manifest["failure_reason"] = if @fatal_observer_error
+        "observation_failed"
+      else
+        error.is_a?(Prefetcher::Error) ? "prefetch_failed" : "setup_failed"
+      end
       save(manifest)
+    end
+
+    def fatal_observer_error?
+      !!@fatal_observer_error
     end
 
     private
@@ -117,16 +139,7 @@ module Bonebed
     end
 
     def configure(environment)
-      specification = Gem.loaded_specs.fetch("bundler")
-      raise Error, "Bundler runtime version does not match its specification" unless specification.version.to_s == Bundler::VERSION
-
-      if specification.default_gem? && !File.directory?(specification.full_gem_path)
-        source = Bundler.method(:root).source_location&.first
-        expected = File.join(RbConfig::CONFIG.fetch("rubylibdir"), "bundler.rb")
-        raise Error, "cannot verify default Bundler runtime source" unless source && File.file?(source) && File.file?(expected) && File.identical?(source, expected)
-      else
-        environment.copy_specification(specification)
-      end
+      BundlerRuntime.prepare(environment)
       FileUtils.mkdir_p(File.join(environment.project, "vendor", "cache"))
       bundle_home = File.join(environment.root, "bundle")
       environment.env.merge!(
@@ -145,14 +158,12 @@ module Bonebed
     end
 
     def command
-      code = "gem 'bundler', '= #{Bundler::VERSION}'; require 'bundler'; " \
-        "raise 'unexpected Bundler runtime version' unless Bundler::VERSION == #{Bundler::VERSION.inspect}; " \
-        "require 'bundler/friendly_errors'; Bundler.with_friendly_errors { require 'bundler/cli'; Bundler::CLI.start(ARGV, debug: true) }"
-      [RbConfig.ruby, "-e", code, "--", "install", "--local"]
+      BundlerRuntime.command("install", "--local")
     end
 
     def session_options(environment)
       options = @session_options.merge(redactor: environment.honeypot)
+      options[:deny] = DenyPolicy.context(@deny, name: "bundle", phase: "install", environment:) if @deny
       options[:enforcement] = Enforcement.load(@enforce, environment) if @enforce
       options
     end
@@ -164,12 +175,14 @@ module Bonebed
         File.write(File.join(environment.project, "Gemfile.lock"), "GEM\n  remote: https://rubygems.org/\n  specs:\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n\nBUNDLED WITH\n   #{Bundler::VERSION}\n")
         observation = Session.new(command, env: environment.env, cwd: environment.project, unsetenv_others: true,
           **session_options(environment).merge(quiet_target: true)).run.snapshot(environment.normalizer)
-        errors = observation.fetch(:errors) + observation.fetch(:observer_errors).reject { |error| error.start_with?("isolation:") }
-        raise Error, "bundle baseline failed: #{errors.join("; ")}" unless errors.empty?
+        errors = observation.fetch(:errors) + observation.fetch(:observer_errors).reject { |error| !@session_options[:sinkhole] && error.start_with?("isolation:") }
+        raise ObserverError, "bundle baseline failed: #{errors.join("; ")}" unless errors.empty?
 
         identity = [command, RUBY_REVISION, Gem::VERSION, Bundler::VERSION, @run.fetch("mode")]
         Baseline::Result.new(id: "bundle-#{Digest::SHA256.hexdigest(JSON.generate(identity))}", observation:)
       end
+    rescue Error, SystemCallError => error
+      raise ObserverError, "bundle baseline failed: #{error.message}"
     end
 
     def save(manifest)

@@ -1,0 +1,1 @@
+Bonebed deterministic package bytes for manifest digest coverage.

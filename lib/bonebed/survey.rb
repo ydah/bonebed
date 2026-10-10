@@ -3,6 +3,8 @@
 require "bundler"
 require "json"
 require "net/http"
+require "openssl"
+require "timeout"
 require "uri"
 
 module Bonebed
@@ -19,11 +21,15 @@ module Bonebed
       @isolate = isolate
       @jobs = jobs
       @last_observer_errors = []
+      @fatal_observer_error = false
+      @target_failed = false
     end
 
     def run(entries, phase:)
       successful = true
       @last_observer_errors = []
+      @fatal_observer_error = false
+      @target_failed = false
       return run_workers(entries, phase:) if @isolate || @jobs > 1
 
       entries.each_with_index do |entry, index|
@@ -35,8 +41,8 @@ module Bonebed
         end
 
         @output.puts "[#{index + 1}/#{entries.size}] #{phase} #{name}"
-        entry_successful, error, observer_errors = run_entry(name, version, phase, require_path)
-        @last_observer_errors.concat(observer_errors || [])
+        entry_successful, error, observer_errors, fatal = run_entry(name, version, phase, require_path)
+        record_result(entry_successful, observer_errors, fatal)
         successful = false unless entry_successful
         @output.puts "  failed: #{error}" if error
       ensure
@@ -45,7 +51,15 @@ module Bonebed
       successful
     end
 
-    def self.top(limit)
+    def fatal_observer_error?
+      @fatal_observer_error
+    end
+
+    def target_failed?
+      @target_failed
+    end
+
+    def self.top(limit, fallback: nil)
       raise ArgumentError, "top must be a positive integer" unless limit.is_a?(Integer) && limit.positive?
 
       names = []
@@ -59,7 +73,32 @@ module Bonebed
       end
 
       names.first(limit).map { |name| {name:, version: nil} }
+    rescue Error, IOError, SystemCallError, SocketError, Timeout::Error, OpenSSL::SSL::SSLError => error
+      raise unless fallback
+
+      entries = ranking_snapshot(fallback, limit)
+      warn "Warning: RubyGems stats unavailable (#{error.class}: #{error.message}); using local ranking snapshot #{fallback}; its ordering may be stale."
+      entries
     end
+
+    def self.ranking_snapshot(path, limit)
+      names = File.readlines(path, chomp: true).filter_map.with_index(1) do |line, number|
+        value = line.sub(/#.*/, "").strip
+        next if value.empty?
+
+        valid = value.match?(Gem::Specification::VALID_NAME_PATTERN) && value.match?(/[a-zA-Z]/) && !value.start_with?(".", "-", "_")
+        raise ArgumentError, "invalid gem name in ranking snapshot #{path}:#{number}" unless valid
+
+        value
+      end
+      raise ArgumentError, "duplicate gem names in ranking snapshot #{path}" unless names.uniq.size == names.size
+      raise ArgumentError, "ranking snapshot #{path} contains only #{names.size} names; #{limit} required" if names.size < limit
+
+      names.first(limit).map { |name| {name:, version: nil} }
+    rescue SystemCallError => error
+      raise ArgumentError, "cannot read ranking snapshot #{path}: #{error.message}"
+    end
+    private_class_method :ranking_snapshot
 
     def self.file(path)
       File.readlines(path, chomp: true).filter_map do |line|
@@ -100,9 +139,18 @@ module Bonebed
 
     private
 
+    def record_result(success, observer_errors, fatal)
+      @last_observer_errors.concat(observer_errors || [])
+      @fatal_observer_error ||= !!fatal
+      @target_failed ||= !success && !fatal
+    end
+
     def run_entry(name, version, phase, require_path)
       @dig.run(name, phase:, version:, require_path:)
-      [@dig.last_errors.empty?, nil, @dig.last_observer_errors]
+      [@dig.last_errors.empty?, nil, @dig.last_observer_errors, false]
+    rescue ObserverError => error
+      write_failure(name, version, phase, error)
+      [false, error.message, [error.message], true]
     rescue Gem::LoadError, StandardError => error
       write_failure(name, version, phase, error)
       [false, error.message]
@@ -119,7 +167,15 @@ module Bonebed
         end
         {name:, version:, require_path:, index:}
       end.uniq { |entry| entry.values_at(:name, :version, :require_path) }
-      @dig.prepare_baselines(phase:) if @jobs > 1 && !pending.empty?
+      if @jobs > 1 && !pending.empty?
+        begin
+          @dig.prepare_baselines(phase:)
+        rescue ObserverError => error
+          record_result(false, [error.message], true)
+          pending.each { |entry| write_failure(entry[:name], entry[:version], phase, error) }
+          return false
+        end
+      end
       successful = true
       until pending.empty? && workers.empty?
         while !pending.empty? && workers.size < @jobs
@@ -136,10 +192,10 @@ module Bonebed
           else
             worker = workers.fetch(reader)
             reader.close
-            entry_successful, error, observer_errors = worker_result(worker, phase)
+            entry_successful, error, observer_errors, fatal = worker_result(worker, phase)
             workers.delete(reader)
             successful = false unless entry_successful
-            @last_observer_errors.concat(observer_errors || [])
+            record_result(entry_successful, observer_errors, fatal)
             @output.puts "  failed: #{worker.fetch(:entry).fetch(:name)}: #{error}" if error
           end
         end
@@ -182,14 +238,14 @@ module Bonebed
       _, status = Process.wait2(worker.fetch(:pid))
       unless status.success?
         message = status.signaled? ? "survey worker terminated by signal #{status.termsig}" : "survey worker exited with status #{status.exitstatus}"
-        write_failure(name, version, phase, Error.new(message))
-        return [false, message]
+        write_failure(name, version, phase, ObserverError.new(message))
+        return [false, message, [message], true]
       end
 
       JSON.parse(worker.fetch(:payload))
     rescue => error
-      write_failure(name, version, phase, error)
-      [false, error.message]
+      write_failure(name, version, phase, ObserverError.new(error.message))
+      [false, error.message, [error.message], true]
     end
 
     def stop_workers(workers)

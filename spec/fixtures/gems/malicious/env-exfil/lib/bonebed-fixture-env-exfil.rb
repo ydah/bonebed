@@ -12,9 +12,11 @@ rescue Errno::ENETUNREACH
   puts "dns blocked"
 end
 begin
-  socket = TCPSocket.new("127.0.0.1", 9)
+  sinkhole = ENV["BONEBED_FIXTURE_SINKHOLE"] == "1"
+  socket = sinkhole ? TCPSocket.new(name, 80) : TCPSocket.new("127.0.0.1", 9)
   body = ENV.fetch("GITHUB_TOKEN")
   socket.write("POST / HTTP/1.1\r\nHost: #{name}\r\nContent-Length: #{body.bytesize}\r\n\r\n#{body}")
+  socket.read if sinkhole
   socket.close
 rescue Errno::ENETUNREACH, Errno::ECONNREFUSED
   puts "http blocked"

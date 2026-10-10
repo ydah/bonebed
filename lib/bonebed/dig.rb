@@ -15,6 +15,7 @@ require_relative "result_store"
 require_relative "phase/install"
 require_relative "phase/require"
 require_relative "phase/plugin"
+require_relative "phase/bundler_plugin"
 require_relative "phase/executable"
 require_relative "policy"
 require_relative "enforcement"
@@ -22,12 +23,16 @@ require_relative "capability_keys"
 
 module Bonebed
   class Dig
-    PHASES = %w[require install plugin exec all].freeze
+    PHASES = %w[require install plugin bundler_plugin exec all].freeze
     attr_reader :results_dir, :last_errors, :last_observer_errors
 
-    def initialize(results_dir: "results", timeout: nil, offline: false, baseline: Baseline.new,
+    def initialize(results_dir: "results", timeout: nil, offline: false, sinkhole: false, baseline: Baseline.new,
       output_limit: Session::OUTPUT_LIMIT, argv_limit: 64, quiet_target: false,
-      prefetcher: Prefetcher.new, real_home: false, cwd: nil, env_profile: "dev", writes_only: false, enforce: nil, trace: nil, repeat: 1)
+      prefetcher: Prefetcher.new, real_home: false, cwd: nil, env_profile: "dev", writes_only: false, enforce: nil, deny: nil, trace: nil, repeat: 1)
+      raise ArgumentError, "sinkhole must be a boolean" unless [true, false].include?(sinkhole)
+      raise ArgumentError, "offline and sinkhole cannot be combined" if offline && sinkhole
+      raise ArgumentError, "trace is unsupported with sinkhole" if sinkhole && trace
+      raise ArgumentError, "deny is incompatible with writes-only capture" if deny && writes_only
       raise ArgumentError, "timeout must be positive" if timeout && !(timeout.is_a?(Numeric) && timeout.positive?)
       raise ArgumentError, "output limit must be nonnegative" unless output_limit.is_a?(Integer) && output_limit >= 0
       raise ArgumentError, "argv limit must be positive" unless argv_limit.is_a?(Integer) && argv_limit.positive?
@@ -38,8 +43,9 @@ module Bonebed
 
       @env_profile = env_profile
       @enforce = enforce
+      @deny = DenyPolicy.load(deny) if deny
       @trace = trace
-      @session_options = {output_limit:, argv_limit:, quiet_target:, target_stdout: $stderr, offline:, writes_only:}
+      @session_options = {output_limit:, argv_limit:, quiet_target:, target_stdout: $stderr, offline:, sinkhole:, writes_only:}
       @results_dir = results_dir
       @store = ResultStore.new(results_dir)
       @timeout = timeout
@@ -79,7 +85,9 @@ module Bonebed
     end
 
     def run_once(name, phase:, version:, require_path:, platform:, executable:, arguments:)
+      current_phase = (phase == "all") ? "install" : phase
       validate!(name, phase, version, require_path:)
+      @deny_name = name
       @last_errors = []
       @last_observer_errors = []
       @run = {"id" => SecureRandom.uuid, "started_at" => Time.now.utc.iso8601,
@@ -113,12 +121,14 @@ module Bonebed
               @run["arguments"] = arguments
             end
             package = packages.fetch(specifications.index(specification))
-            baseline = @baseline.capture(phase: "install", **baseline_options)
+            current_phase = "install"
+            baseline = @baseline.capture(phase: "install", **baseline_options("install"))
             collector = Phase::Install.call(environment, packages, **session_options("install", specification, environment))
             manifest = build(environment, specification, "install", collector.snapshot(environment.normalizer), baseline, specifications:, package:)
             output = [save(manifest)]
             if phase == "exec" && manifest.fetch("errors").empty?
-              baseline = @baseline.capture(phase: "require", **baseline_options)
+              current_phase = "exec"
+              baseline = @baseline.capture(phase: "require", **baseline_options("exec"))
               collector = Phase::Executable.call(environment, specification, executable:, arguments:,
                 **session_options("exec", specification, environment))
               result = build(environment, specification, "exec", collector.snapshot(environment.normalizer), baseline, specifications:, package:)
@@ -127,11 +137,20 @@ module Bonebed
               output << save(result)
             end
             if manifest.fetch("errors").empty? && (phase == "plugin" || (phase == "all" && manifest.dig("gem", "rubygems_plugin")))
-              baseline = @baseline.capture(phase: "plugin", **baseline_options)
+              current_phase = "plugin"
+              baseline = @baseline.capture(phase: "plugin", **baseline_options("plugin"))
               plugin = Phase::Plugin.call(environment, **session_options("plugin", specification, environment))
               output << save(build(environment, specification, "plugin", plugin.snapshot(environment.normalizer), baseline, specifications:, package:))
             end
+            if manifest.fetch("errors").empty? && (phase == "bundler_plugin" || (phase == "all" && manifest.dig("gem", "bundler_plugin")))
+              current_phase = "bundler_plugin"
+              baseline = @baseline.capture(phase: "bundler_plugin", **baseline_options("bundler_plugin"))
+              plugin = Phase::BundlerPlugin.call(environment, specification, packages:,
+                **session_options("bundler_plugin", specification, environment))
+              output << save(build(environment, specification, "bundler_plugin", plugin.snapshot(environment.normalizer), baseline, specifications:, package:))
+            end
             if phase == "all" && manifest.fetch("errors").empty?
+              current_phase = "require"
               specification.loaded_from = File.join(environment.gem_home, "specifications", "#{specification.full_name}.gemspec")
               output << observe_require(environment, specification, specifications, require_path, package:)
             end
@@ -140,6 +159,10 @@ module Bonebed
         end
       end
       (phase == "all") ? paths : paths.last
+    rescue ObserverError => error
+      @last_observer_errors << error.message
+      write_failure(name, phase: current_phase, version: version || "unknown", error:)
+      raise
     rescue Prefetcher::Error => error
       @last_errors = [error.message]
       path = write_failure(name, phase: (phase == "all") ? "install" : phase, version: version || "unknown", error:)
@@ -150,8 +173,16 @@ module Bonebed
     def write_failure(name, phase:, version:, error:)
       validate!(name, phase)
       observation = empty_observation(error)
+      if error.is_a?(ObserverError)
+        observation[:observer_errors] = observation[:errors]
+        observation[:errors] = []
+      end
       data = ManifestBuilder.call(name, version, phase, observation, Baseline::Result.new(id: nil, observation: empty_observation), run: @run)
-      data["failure_reason"] = error.is_a?(Prefetcher::Error) ? "prefetch_failed" : "setup_failed"
+      data["failure_reason"] = if error.is_a?(ObserverError)
+        "observation_failed"
+      else
+        error.is_a?(Prefetcher::Error) ? "prefetch_failed" : "setup_failed"
+      end
       @store.write(data)
     end
 
@@ -169,6 +200,7 @@ module Bonebed
       @store.matching(name, phase: "install", version:, platform:, mode:).any? do |installed|
         gem = installed.fetch("gem")
         phases = gem["rubygems_plugin"] ? %w[require plugin] : %w[require]
+        phases << "bundler_plugin" if gem["bundler_plugin"]
         phases.all? do |entry|
           @store.matching(name, phase: entry, version: gem.fetch("version"), platform: gem["platform"],
             require_path: (entry == "require") ? require_path : nil, mode:).any? do |sample|
@@ -179,19 +211,21 @@ module Bonebed
     end
 
     def prepare_baselines(phase:)
+      # Deny allow rules depend on the individual gem identity, unavailable at survey warmup.
+      return if @deny
       phases = case phase
-      when "all" then %w[install require plugin]
+      when "all" then %w[install require plugin bundler_plugin]
       when "exec" then %w[install require]
       else [phase]
       end
-      phases.each { |entry| @baseline.capture(phase: entry, **baseline_options) }
+      phases.each { |entry| @baseline.capture(phase: entry, **baseline_options(entry)) }
     end
 
     def observation_mode
-      {"offline" => @offline, "honeypot" => true, "env_profile" => @env_profile,
+      {"offline" => @offline, "sinkhole" => @session_options[:sinkhole], "honeypot" => true, "env_profile" => @env_profile,
        "writes_only" => @session_options[:writes_only], "real_home" => @environment_options[:real_home],
        "cwd" => @environment_options[:cwd] && File.expand_path(@environment_options[:cwd]),
-       "enforce" => @enforce && Digest::SHA256.file(@enforce).hexdigest, "repeat" => @repeat}
+       "enforce" => @enforce && Digest::SHA256.file(@enforce).hexdigest, "deny" => @deny && DenyPolicy.digest(@deny), "repeat" => @repeat}
     end
 
     private
@@ -217,25 +251,28 @@ module Bonebed
 
     def validate!(name, phase, version = nil, require_path: nil)
       raise ArgumentError, "invalid gem name" unless name.is_a?(String) && name.match?(Gem::Specification::VALID_NAME_PATTERN) && name.match?(/[a-zA-Z]/) && !name.start_with?(".", "-", "_")
-      raise ArgumentError, "phase must be require, install, plugin, exec or all" unless PHASES.include?(phase)
+      raise ArgumentError, "phase must be #{PHASES.join(", ")}" unless PHASES.include?(phase)
       raise ArgumentError, "invalid gem version" if version && !Gem::Version.correct?(version)
       raise ArgumentError, "require path must not be empty" if require_path == ""
       raise ArgumentError, "require path only applies to require or all phase" if require_path && !%w[require all].include?(phase)
     end
 
-    def baseline_options
-      {offline: @offline, writes_only: @session_options[:writes_only], env_profile: @env_profile, enforce: @enforce}
+    def baseline_options(phase)
+      options = {offline: @offline, sinkhole: @session_options[:sinkhole], writes_only: @session_options[:writes_only], env_profile: @env_profile, enforce: @enforce}
+      options[:deny] = DenyPolicy.context(@deny, name: @deny_name, phase:) if @deny
+      options
     end
 
     def session_options(phase, specification, environment = nil)
       options = @session_options.merge(timeout: @timeout || ((phase == "install") ? 600 : 60))
+      options[:deny] = DenyPolicy.context(@deny, name: specification.name, phase:, environment:) if @deny
       options[:redactor] = environment.honeypot if environment
       options[:trace] = "#{@trace}.#{specification.name}.#{specification.version}.#{@run.fetch("id")}.#{phase}.jsonl" if @trace
       options
     end
 
     def observe_require(environment, specification, specifications, require_path, package: nil)
-      baseline = @baseline.capture(phase: "require", **baseline_options)
+      baseline = @baseline.capture(phase: "require", **baseline_options("require"))
       begin
         collector, require_path = Phase::Require.call(environment, specification, require_path:, **session_options("require", specification, environment))
         observation = collector.snapshot(environment.normalizer)
@@ -253,7 +290,7 @@ module Bonebed
       elsif observation.dig(:target, :signal)
         "signal"
       elsif !observation.fetch(:errors).empty?
-        {"install" => "build_failed", "exec" => "exec_failed", "plugin" => "plugin_failed"}.fetch(phase, "require_failed")
+        {"install" => "build_failed", "exec" => "exec_failed", "plugin" => "plugin_failed", "bundler_plugin" => "bundler_plugin_failed"}.fetch(phase, "require_failed")
       end
       environment.honeypot ? environment.honeypot.redact(data) : data
     end

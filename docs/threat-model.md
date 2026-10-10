@@ -74,6 +74,14 @@ thread and its subsequent children, so Bonebed applies them immediately before t
 Allowed paths are canonicalized and pinned with `O_PATH`; concurrent parent-directory replacement
 between resolution and open remains a setup race. Landlock does not repair observation TOCTOU gaps.
 
+## Sinkhole networking
+
+Sinkhole networking uses a separate rootless network namespace and supplies a synthetic resolver
+without changing host files. Setup failure stops execution. It blocks host Unix socket connections,
+drops namespace capabilities, protects helper memory, and authenticates returned results. HTTP samples
+are bounded and TLS inspection ends at plaintext ClientHello SNI. These controls do not isolate the
+shared host filesystem or confer a general sandbox guarantee. See [sinkhole limits](sinkhole.md).
+
 ## Process tree cleanup and cgroup delegation
 
 When the supervisor's current cgroup v2 directory is writable and delegated, Bonebed creates a new,

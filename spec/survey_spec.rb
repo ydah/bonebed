@@ -125,7 +125,9 @@ RSpec.describe Bonebed::Survey do
       expect(survey.run([{name: "killed"}, {name: "safe"}, {name: "safe"}], phase: "require")).to be(false)
       expect(failures).to eq([["killed", "survey worker terminated by signal 9"]])
       expect(File.readlines(log).count { |line| line.start_with?("start") }).to eq(1)
-      expect(survey.last_observer_errors).to eq(["safe warning"])
+      expect(survey.last_observer_errors).to contain_exactly("survey worker terminated by signal 9", "safe warning")
+      expect(survey.fatal_observer_error?).to be(true)
+      expect(survey.target_failed?).to be(false)
     end
   end
 
@@ -171,6 +173,33 @@ RSpec.describe Bonebed::Survey do
     allow(described_class).to receive(:fetch_page).and_return('<a href="/gems/demo">demo</a>')
     expect { described_class.top(3) }.to raise_error(Bonebed::Error, /only 1/)
     expect { described_class.top(0) }.to raise_error(ArgumentError)
+  end
+
+  it "uses an explicit ranked snapshot only after primary failure and warns about stale ordering" do
+    Tempfile.create("ranking") do |file|
+      file.write("# Source: RubyGems stats; reviewed 2026-10-10\njson\nrake\nsinatra\n")
+      file.flush
+      allow(described_class).to receive(:fetch_page).and_return('<a href="/gems/live">live</a>')
+      expect { expect(described_class.top(1, fallback: file.path)).to eq([{name: "live", version: nil}]) }.not_to output.to_stderr
+      expect { expect(described_class.top(2, fallback: file.path)).to eq([{name: "json", version: nil}, {name: "rake", version: nil}]) }
+        .to output(/RubyGems stats.*only 1.*local ranking snapshot.*stale/m).to_stderr
+      allow(described_class).to receive(:fetch_page).and_raise(SocketError, "registry unavailable")
+      expect { expect(described_class.top(1, fallback: file.path)).to eq([{name: "json", version: nil}]) }.to output(/registry unavailable/).to_stderr
+      expect { described_class.top(1) }.to raise_error(SocketError)
+      expect { described_class.top(0, fallback: file.path) }.to raise_error(ArgumentError, /positive/)
+    end
+  end
+
+  it "rejects malformed, duplicate, and insufficient ranking snapshots without observing partial lists" do
+    allow(described_class).to receive(:fetch_page).and_raise(Bonebed::Error, "HTTP 503")
+    Tempfile.create("ranking") do |file|
+      ["../evil\nrake\n", "-invalid\nrake\n", "123\nrake\n", "rake 1.0\njson\n", "rake\nrake\n", "rake\n"].each do |content|
+        File.write(file.path, content)
+        expect { described_class.top(2, fallback: file.path) }.to raise_error(ArgumentError, /snapshot/)
+      end
+      File.write(file.path, "rake\njson\n../invalid-tail\n")
+      expect { described_class.top(2, fallback: file.path) }.to raise_error(ArgumentError, /snapshot/)
+    end
   end
 
   it "parses names and optional versions from a text file" do

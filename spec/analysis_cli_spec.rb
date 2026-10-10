@@ -22,6 +22,57 @@ RSpec.describe "analysis commands" do
       .to output(/file:write:\$PWD\/\.git\/hooks\/pre-commit/).to_stdout
   end
 
+  it "preserves diff keys and attaches default rule severities to additions and removals" do
+    before_manifest["exec"] = [{"path" => "/usr/bin/old-tool"}]
+    after_manifest["exec"] = [{"path" => "/usr/bin/new-tool"}]
+    after_manifest["network"] = [{"family" => "inet", "addr" => "192.0.2.1", "port" => 443}]
+    after_manifest["files"]["read"]["other"] = ["$HOME/.aws/credentials", "/etc/unclassified"]
+    change = Bonebed::CLI.compare_manifests(before_manifest, after_manifest, counts: true)
+    findings = change.fetch("findings").to_h { |finding| [finding.fetch("capability"), finding] }
+    expect(change.fetch("added")).to match_array(findings.keys)
+    expect(findings.fetch("file:read:$HOME/.aws/credentials")).to include("severity" => "critical", "rule_id" => "credential-read")
+    expect(findings.fetch("file:write:$PWD/.git/hooks/pre-commit")).to include("severity" => "critical")
+    expect(findings.fetch("network:inet:192.0.2.1:443")).to include("severity" => "high", "rule_id" => "install-network")
+    expect(findings.fetch("exec:/usr/bin/new-tool")).to include("severity" => "medium", "rule_id" => "external-command")
+    expect(findings.fetch("file:read:/etc/unclassified")).to include("severity" => "info", "rule_id" => "unclassified-capability")
+    expect(change.fetch("removed_findings")).to contain_exactly(include("capability" => "exec:/usr/bin/old-tool", "severity" => "medium"))
+    expect(change.fetch("counts")).to include("exec:/usr/bin/old-tool" => {"before" => 1, "after" => 0})
+  end
+
+  it "evaluates the observed phase and canonical keys without trusting saved findings" do
+    after_manifest["phase"] = "require"
+    after_manifest["network"] = [{"family" => "inet", "addr" => "192.0.2.1", "port" => 443}]
+    after_manifest["files"]["read"]["self"] = ["$GEM_HOME/gems/demo-2.0.0/lib/new.rb"]
+    after_manifest["findings"] = [{"capability" => "network:inet:192.0.2.1:443", "severity" => "critical"}]
+    change = Bonebed::CLI.compare_manifests(nil, after_manifest)
+    expect(change.fetch("findings")).to include(include("capability" => "network:inet:192.0.2.1:443", "severity" => "info"),
+      include("capability" => "file:read:$GEM_HOME/gems/demo-<version>/lib/new.rb", "severity" => "info"))
+    expect(Bonebed::CLI.compare_manifests(after_manifest, nil).fetch("findings")).to eq([])
+    expect(Bonebed::CLI.compare_manifests(after_manifest, after_manifest).values_at("findings", "removed_findings")).to eq([[], []])
+  end
+
+  it "renders policy severities consistently in Markdown, JSON, and SARIF diffs" do
+    after_manifest["exec"] = [{"path" => "/usr/bin/new-tool"}]
+    after_manifest["files"]["write"] << "$PWD/unclassified"
+    change = Bonebed::CLI.compare_manifests(before_manifest, after_manifest)
+    output = StringIO.new
+    allow(Bonebed::CLI).to receive(:puts) { |text| output.puts(text) }
+    Bonebed::CLI.output_diff([change], "md")
+    expect(output.string).to include("[critical] file:write:$PWD/.git/hooks/pre-commit", "[medium] exec:/usr/bin/new-tool", "[info] file:write:$PWD/unclassified")
+    output.truncate(0)
+    output.rewind
+    Bonebed::CLI.output_diff([change], "json")
+    expect(JSON.parse(output.string)).to eq([change])
+    output.truncate(0)
+    output.rewind
+    File.write("Gemfile.lock", "GEM\n  specs:\n    demo (2.0.0)\n")
+    Bonebed::CLI.output_diff([change], "sarif", lockfile: "Gemfile.lock")
+    results = JSON.parse(output.string).dig("runs", 0, "results")
+    expect(results).to include(include("ruleId" => "git-hook-write", "level" => "error"),
+      include("ruleId" => "external-command", "level" => "warning"), include("ruleId" => "unclassified-capability", "level" => "note"))
+    expect(results.map { |result| result.dig("locations", 0, "physicalLocation", "region", "startLine") }).to all(eq(3))
+  end
+
   it "checks policy thresholds and defaults from the current policy file" do
     File.write("after.json", JSON.generate(after_manifest))
     expect { expect(Bonebed::CLI.check(%w[after.json --format json])).to eq(3) }.to output(/git-hook-write/).to_stdout
@@ -36,6 +87,20 @@ RSpec.describe "analysis commands" do
     expect_any_instance_of(Bonebed::Dig).not_to receive(:run)
     expect { expect(Bonebed::CLI.compare(%w[demo 1.0.0 2.0.0 --phase install --format json])).to eq(0) }
       .to output(/file:write:\$PWD\/\.git\/hooks\/pre-commit/).to_stdout
+  end
+
+  it "accepts sinkhole in compare and lockfile comparison and forwards it to Dig" do
+    store = Bonebed::ResultStore.new("results")
+    [before_manifest, after_manifest].each do |manifest|
+      manifest.fetch("run").fetch("mode")["sinkhole"] = true
+      store.write(manifest)
+    end
+    expect(Bonebed::Dig).to receive(:new).with(hash_including(sinkhole: true)).at_least(:once).and_call_original
+    expect_any_instance_of(Bonebed::Dig).not_to receive(:run)
+    expect { expect(Bonebed::CLI.compare(%w[demo 1.0.0 2.0.0 --phase install --sinkhole --format json])).to eq(0) }.to output.to_stdout
+    allow(Bonebed::Survey).to receive(:lockfile).with("base.lock").and_return([{name: "demo", version: "1.0.0"}])
+    allow(Bonebed::Survey).to receive(:lockfile).with("head.lock").and_return([{name: "demo", version: "2.0.0"}])
+    expect { expect(Bonebed::CLI.diff_lock(%w[base.lock head.lock --phase install --sinkhole --format json])).to eq(0) }.to output.to_stdout
   end
 
   it "writes a capability lock and preserves other gems on a targeted update" do

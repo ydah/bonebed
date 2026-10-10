@@ -21,7 +21,8 @@ bonebed check results --lock Gemfile.capabilities.lock --strict
 
 The plugin requires full schema v2 install and require observations for every locked package compatible
 with the local platform, including transitive dependencies. A declared RubyGems plugin also needs its
-plugin phase. The approval version and observed version/platform must match the lockfile exactly.
+plugin phase; a declared root `plugins.rb` needs a separate `bundler_plugin` phase. See
+[Bundler plugin observation](bundler-plugin-observation.md). The approval version and observed version/platform must match the lockfile exactly.
 Each required phase must be explicitly approved, even when its capability list is empty.
 
 Missing or invalid files, target/observer errors, unknown target status, write-only observations, and
@@ -49,7 +50,8 @@ this check's guarantees. Review and protect those inputs separately from capabil
 
 The published 0.1.0 gem does not contain this plugin. For this source checkout, work inside a trusted
 project containing a Gemfile so Bundler uses that project's `.bundle/plugin` directory. First make
-Bonebed's runtime dependencies available there. A fully local setup can seed reviewed package archives:
+Bonebed's runtime dependencies available there. A fully local setup can seed reviewed package archives.
+The `--path` command below is supported by the tested Bundler 2.5.22 and newer releases:
 
 ```sh
 gem install --local /reviewed/cache/seccomp-notify-0.3.0.gem --install-dir .bundle/plugin --no-document
@@ -63,6 +65,28 @@ environment settings above keep a project's separate application installation pa
 bootstrap. No global plugin installation is needed. After a version containing the plugin is published,
 `bundle plugin install bonebed --version REVIEWED_VERSION` provides the normal registry installation
 route; that explicit installation may use the network.
+
+Bundler 2.4, shipped with Ruby 3.2, does not support path-plugin installation. Use an indexed local
+gem repository instead. Build the current checkout (currently version 0.1.0) and index it:
+
+```sh
+# In the reviewed Bonebed checkout, using RubyGems 3.4 (included with Ruby 3.2):
+mkdir -p /reviewed/bonebed-repository/gems
+gem build bonebed.gemspec --output /reviewed/bonebed-repository/gems/bonebed-0.1.0.gem
+gem generate_index --directory /reviewed/bonebed-repository
+
+# In the trusted project, after seeding dependencies as above:
+env -u BUNDLE_PATH BUNDLE_IGNORE_CONFIG=true bundle plugin install bonebed \
+  --source file:///reviewed/bonebed-repository --version 0.1.0
+bundle plugin list
+```
+
+Newer RubyGems releases provide `gem generate_index` through the separate
+[`rubygems-generate_index` gem](https://guides.rubygems.org/command-reference/#gem-generate_index);
+create the repository with RubyGems 3.4 or install that reviewed tooling separately. The `file://` source is also
+supported by newer Bundler versions and never substitutes the published package for your local build.
+Keep the selected local repository restricted to reviewed archives. Missing dependencies fail instead
+of falling back to the public registry.
 
 Then run a frozen install, enabling plugins explicitly:
 
@@ -96,6 +120,9 @@ the enclosing `bundle` process exits unsuccessfully. Bonebed CLI exit-code meani
 Bundler's exit code.
 
 The implementation uses the [documented Bundler plugin API](https://guides.rubygems.org/bundler_plugins/)
-and its before-install hooks. Local integration checks covered Ruby 3.3.12/Bundler 2.5.22,
+and its before-install hooks. Local integration checks covered Ruby 3.2.11/Bundler 2.4.19,
+Ruby 3.3.12/Bundler 2.5.22,
 Ruby 3.4.11/Bundler 2.6.9, and Ruby 4.0/Bundler 4.0.16. The repository's Ruby matrix exercises the same
-subprocess fixtures; hosted results for a particular commit must be checked separately.
+subprocess fixtures; hosted results for a particular commit must be checked separately. Integration
+fixtures build the current source into a temporary local gem repository and reject HTTP fetches before
+connecting. The Ruby 3.2 compatibility run also used a Docker container with networking disabled.

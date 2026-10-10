@@ -7,7 +7,7 @@ module Bonebed
     COMMON_FILE_CHANGES = %i[unlinkat renameat renameat2 mkdirat symlinkat linkat fchmod fchmodat fchmodat2 fchown fchownat truncate ftruncate].freeze
     LEGACY_FILE_CHANGES = %i[creat unlink rmdir rename mkdir symlink link chmod chown lchown].freeze
     FILE_CHANGES = {x86_64: (COMMON_FILE_CHANGES + LEGACY_FILE_CHANGES).freeze, aarch64: COMMON_FILE_CHANGES}.freeze
-    SUSPICIOUS = %i[memfd_create ptrace process_vm_writev init_module finit_module mount unshare setns bpf io_uring_setup perf_event_open keyctl].freeze
+    SUSPICIOUS = %i[memfd_create ptrace process_vm_writev init_module finit_module mount unshare setns bpf io_uring_setup perf_event_open keyctl kill].freeze
     DATAGRAMS = %i[sendto sendmsg sendmmsg].freeze
 
     module_function

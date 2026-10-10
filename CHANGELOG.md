@@ -9,12 +9,20 @@ Before 1.0, minor releases may contain breaking changes, listed explicitly below
 
 - Write schema v2 manifests in a nested, identity-specific layout. Reads are grouped as `self`, `resolver`, and `other`; open counters drop the `openat_` prefix. Reports still read v1; v1 reading is planned for removal at 1.0.
 - Run targets in disposable home/project directories with decoy credentials and a reduced environment. Use `--real-home` or `--cwd DIR` to select real directories explicitly.
-- Distinguish target failures and timeouts (exit 1), observation failures (exit 2 with `--strict`), policy violations (exit 3), and invalid usage (exit 64).
+- Distinguish target failures and timeouts (exit 1), fatal observation failures (exit 2, with `--strict` also reporting nonfatal observer errors), policy violations (exit 3), and invalid usage (exit 64).
 - Record observer failures in `observer_errors` separately from target `errors`; add target exit, signal, and timeout metadata.
 - Default to a 600-second install timeout and a 60-second require timeout. Limit stored stdout and stderr to 1 MiB each; expose truncation flags.
 
 ### Added
 
+- Add best-effort syscall policy refusal, other-process signal observations, working-directory build attribution, and own-package write classification.
+- Add verbose diagnostics, optional container-only execution, and a validated local ranking snapshot fallback.
+- Add Markdown report contents, severity-ordered findings, and folded target details; separate Markdown, JSON, SARIF, CSV, and HTML formatters while preserving report APIs.
+- Observe declared Bundler plugins in a separate `bundler_plugin` phase through Bundler's registration API, with isolated configuration, matching baselines, and all-phase resume/approval checks.
+- Compare observations across separate Ruby container runtimes and preserve runtime identity in saved results.
+- Add fail-closed sinkhole observations with fake DNS, HTTP request samples, TLS SNI, canary redaction, and authenticated helper results.
+- Add full-manifest golden contracts and the fourteen-scenario adversarial gem fixture suite.
+- Prepare OIDC artifact attestations for the opt-in sharded dataset workflow.
 - Add an opt-in Bundler pre-install plugin that requires frozen, exactly approved package observations and stops on incomplete results or policy violations.
 
 - Stream aggregate report counts without retaining every manifest body in memory.

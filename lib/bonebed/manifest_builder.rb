@@ -30,13 +30,16 @@ module Bonebed
       end
       files[:notable] = (reads.grep(/\A(?:\$HOME|\$PWD)\//) + files[:write].grep(/\A(?:\$HOME|\$PWD|\$TMPDIR)\//)).uniq.sort
         .reject { |path| ROUTINE_RUBYGEMS_PREFIXES.any? { |prefix| path.start_with?(prefix) } }
+      own_writes = files[:write].select { |path| path.start_with?(own) }
+      files[:self_write] = own_writes unless own_writes.empty?
       specification = specifications.find { |spec| spec.name == name }
       gem = {"name" => name, "version" => version, "platform" => platform, "require_path" => require_path,
              "sha256" => package && Digest::SHA256.file(package).hexdigest,
              "extensions" => specification&.extensions || [], "executables" => specification&.executables || [],
              "required_ruby_version" => specification&.required_ruby_version&.to_s,
              "post_install_message" => specification&.post_install_message,
-             "rubygems_plugin" => !!specification&.files&.any? { |file| File.basename(file) == "rubygems_plugin.rb" }}
+             "rubygems_plugin" => !!specification&.files&.any? { |file| File.basename(file) == "rubygems_plugin.rb" },
+             "bundler_plugin" => !!specification&.files&.include?("plugins.rb")}
       stats = observation.fetch(:stats).transform_keys(&:to_s)
       stats["open_total"] = stats.delete("openat_total")
       stats["open_after_baseline"] = stats.delete("openat_after_baseline")
@@ -55,8 +58,19 @@ module Bonebed
         "canary_hits" => [], "findings" => []
       }
       data = JSON.parse(JSON.generate(data))
+      data["environment"]["bundler"] = Bundler::VERSION if phase == "bundler_plugin"
       data["environment"]["cleanup"] = observation[:cleanup] if observation[:cleanup]
       data["process_tree"] = observation.fetch(:process_tree, [])
+      data["process_tree"] = data["process_tree"].map do |event|
+        event = event.transform_keys(&:to_s)
+        owner = specifications.find do |spec|
+          directory = "$GEM_HOME/gems/#{spec.full_name}"
+          event["cwd"] == directory || event["cwd"].to_s.start_with?("#{directory}/")
+        end
+        owner ? event.merge("attribution" => {"gem" => owner.name, "version" => owner.version.to_s, "source" => "cwd"}) : event
+      end
+      data["network_intent"] = observation.fetch(:network_intent, [])
+      data["denied"] = counted(observation[:denied]) if observation[:denied] && !observation[:denied].empty?
       data["run"]["mode"]["isolation"] = observation[:isolation] if data["run"] && observation[:isolation]
       %i[processes listen sockets suspicious dns anti_analysis].each do |group|
         data[group.to_s] = counted(observation.fetch(group, {}))

@@ -110,6 +110,7 @@ module Bonebed
       observations = manifests.select { |manifest| manifest.fetch("gem").values_at("name", "version", "platform") == [name, version, platform] }
       phases = %w[install require]
       phases << "plugin" if observations.any? { |manifest| manifest.dig("gem", "rubygems_plugin") }
+      phases << "bundler_plugin" if observations.any? { |manifest| manifest.dig("gem", "bundler_plugin") }
       phases.each do |phase|
         keys = entry.fetch("phases")[phase]
         raise Rejected, "Bonebed missing #{phase} approval for #{name.inspect}" unless keys

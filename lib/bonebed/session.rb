@@ -17,6 +17,7 @@ require_relative "isolation"
 require_relative "path_normalizer"
 require_relative "landlock"
 require_relative "cgroup"
+require_relative "deny_policy"
 
 module Bonebed
   class Session
@@ -24,10 +25,14 @@ module Bonebed
 
     def initialize(command, env: {}, cwd: Dir.pwd, timeout: 30, offline: false, collector: Collector.new,
       output_limit: OUTPUT_LIMIT, argv_limit: 64, quiet_target: false, target_stdout: $stdout, unsetenv_others: false,
-      writes_only: false, trace: nil, enforcement: nil, resource_limits: {}, redactor: nil)
+      writes_only: false, trace: nil, enforcement: nil, resource_limits: {}, redactor: nil,
+      sinkhole: false, resolver_file: nil, deny: nil)
       raise ArgumentError, "timeout must be positive" unless timeout.is_a?(Numeric) && timeout.positive?
       raise ArgumentError, "output limit must be nonnegative" unless output_limit.is_a?(Integer) && output_limit >= 0
       raise ArgumentError, "argv limit must be positive" unless argv_limit.is_a?(Integer) && argv_limit.positive?
+      raise ArgumentError, "sinkhole and offline are mutually exclusive" if sinkhole && offline
+      raise ArgumentError, "sinkhole does not support trace output" if sinkhole && trace
+      raise ArgumentError, "deny is incompatible with writes-only capture" if deny && writes_only
       unless resource_limits.is_a?(Hash) && (resource_limits.keys - %i[AS CPU NOFILE FSIZE]).empty? && resource_limits.values.all? { |value| value.is_a?(Integer) && value.positive? }
         raise ArgumentError, "resource limits must be positive AS, CPU, NOFILE or FSIZE integers"
       end
@@ -41,8 +46,16 @@ module Bonebed
       @command = command
       @env = env
       @cwd = cwd
+      @deny_context = deny
+      if deny
+        normalizer = PathNormalizer.new(home: env.fetch("HOME", Dir.home), cwd:, tmpdir: env.fetch("TMPDIR", Dir.tmpdir),
+          gem_paths: [env["GEM_HOME"], *env["GEM_PATH"]&.split(File::PATH_SEPARATOR), *Gem.path].compact)
+        @deny_policy = DenyPolicy.new(deny, normalizer:)
+      end
       @timeout = timeout
       @offline = offline
+      @sinkhole = sinkhole
+      @resolver_file = resolver_file
       @collector = collector
       @bootstrap_exec = true
       @endpoints = {}
@@ -63,6 +76,19 @@ module Bonebed
     end
 
     def run
+      if @sinkhole
+        require_relative "sinkhole"
+        return Sinkhole.run(@command, env: @env, cwd: @cwd, timeout: @timeout, collector: @collector,
+          quiet_target: @quiet_target, target_stdout: @target_stdout, redactor: @redactor,
+          unsetenv_others: @unsetenv_others, output_limit: @output_limit, argv_limit: @argv_limit,
+          writes_only: @writes_only, enforcement: @enforcement, resource_limits: @resource_limits, deny: @deny_context)
+      end
+      run_local
+    end
+
+    private
+
+    def run_local
       @target_pid = nil
       @cgroup = nil
       @cgroup_cleaned = false
@@ -90,6 +116,7 @@ module Bonebed
       rescue Cgroup::Unavailable => error
         record_cleanup_fallback(error)
       end
+      @resolver = File.open(@resolver_file, File::RDONLY | File::NOFOLLOW) if @resolver_file
       if @trace_path
         @trace_io = File.open(@trace_path, File::WRONLY | File::CREAT | File::APPEND | File::NOFOLLOW, 0o600)
         @trace_io.sync = true
@@ -131,15 +158,15 @@ module Bonebed
       [stdout_reader, stdout_writer, stderr_reader, stderr_writer].compact.each { |io| io.close unless io.closed? }
       [stdout_thread, stderr_thread].compact.each(&:join)
       @trace_io&.close
+      @resolver&.close
     end
-
-    private
 
     def build_supervisor(stdout, stderr)
       require "seccomp/notify"
       open_syscalls = RUBY_PLATFORM.include?("x86_64") ? %i[open openat] : %i[openat]
       process_syscalls = RUBY_PLATFORM.include?("x86_64") ? %i[clone clone3 fork vfork] : %i[clone clone3]
-      writes_only = @writes_only
+      writes_only = @writes_only && !@resolver
+      socket_syscalls = @resolver ? %i[socket socketpair] : %i[socket]
       policy = Seccomp::Notify::Policy.new(deny_io_uring: false) do
         if writes_only
           open_syscalls.each do |syscall|
@@ -148,11 +175,12 @@ module Bonebed
         else
           notify(*open_syscalls)
         end
-        notify(:openat2, :socket, :connect, :execve, :execveat, :bind, :listen, :setsid, :exit, :exit_group,
+        notify(:openat2, *socket_syscalls, :connect, :execve, :execveat, :bind, :listen, :setsid, :exit, :exit_group,
           *process_syscalls, *Syscalls.file_changes, *Syscalls::DATAGRAMS, *Syscalls::SUSPICIOUS)
       end
       barrier_reader, barrier_writer = IO.pipe if @cgroup
       supervisor = Seccomp::Notify.spawn(policy, poll_interval: 0.02) do
+        Isolation.target_dumpable! if @resolver
         if barrier_reader
           barrier_writer.close
           exit! 126 unless barrier_reader.read(1) == "1"
@@ -197,13 +225,18 @@ module Bonebed
       end
       open_syscalls.each { |syscall| on(supervisor, syscall) { |request| handle_open(request, syscall) } }
       on(supervisor, :connect) { |request| handle_connect(request) }
-      on(supervisor, :socket) do |request|
-        observe(request, :socket) do
-          family, type, protocol = request.args.first(3)
-          name = {1 => "unix", 2 => "inet", 10 => "inet6"}.merge(Decoder::Connect::FAMILY_NAMES).fetch(family, "af_#{family}")
-          event = {family: name, type: type & 0xf, protocol:}
-          @collector.record(:sockets, event)
-          trace_fields(request, event)
+      socket_syscalls.each do |syscall|
+        on(supervisor, syscall) do |request|
+          observe(request, syscall) do
+            family, type, protocol = request.args.first(3)
+            family &= 0xffffffff
+            name = {1 => "unix", 2 => "inet", 10 => "inet6"}.merge(Decoder::Connect::FAMILY_NAMES).fetch(family, "af_#{family}")
+            event = {family: name, type: type & 0xf, protocol:}
+            @collector.record(:sockets, event)
+            trace_fields(request, event)
+            deny_event(request, :sockets, event)
+            request.error!(Errno::EAFNOSUPPORT) if @resolver && family == Socket::AF_UNIX && !request.responded?
+          end
         end
       end
       on(supervisor, :openat2) { |request| handle_openat2(request) }
@@ -242,7 +275,7 @@ module Bonebed
     end
 
     def task_info(request)
-      @tasks[request.pid] ||= begin
+      metadata = @tasks[request.pid] ||= begin
         status = File.read("/proc/#{request.pid}/status")
         tgid = status[/^Tgid:\s+(\d+)/, 1].to_i
         ppid = @parents[tgid] || status[/^PPid:\s+(\d+)/, 1].to_i
@@ -251,15 +284,42 @@ module Bonebed
           @tracking_mutex.synchronize { @tracked[tgid] = info.fetch(:started_at) }
         end
         @executables[tgid] ||= File.readlink("/proc/#{tgid}/exe")
-        @collector.record_process({pid: tgid, ppid:, path: @executables[tgid], parent: @executables[ppid]})
         {tid: request.pid, tgid:, ppid:}
       end
+      cwd = begin
+        File.readlink("/proc/#{request.pid}/cwd")
+      rescue SystemCallError
+        nil
+      end
+      tgid, ppid = metadata.values_at(:tgid, :ppid)
+      @collector.record_process({pid: tgid, ppid:, path: @executables[tgid], parent: @executables[ppid], cwd:})
+      metadata.merge(cwd:)
     rescue SystemCallError
       {tid: request.pid, tgid: request.pid, ppid: nil}
     end
 
     def trace_fields(request, event)
       @trace_fields[request.object_id]&.merge!(event)
+    end
+
+    def deny_event(request, field, event)
+      return unless @deny_policy && !request.responded?
+      violations = @deny_policy.violations(field, event)
+      return if violations.empty?
+
+      request.error!(Errno::EPERM)
+      violations.each do |finding|
+        @collector.record_denial({syscall: request.syscall.to_s, capability: finding.fetch("capability"),
+                                 rule_id: finding.fetch("rule_id"), severity: finding.fetch("severity")})
+      end
+      trace_fields(request, {denied: true, deny_rules: violations.map { |finding| finding.fetch("rule_id") }.uniq})
+    end
+
+    def deny_open(request, event, flags)
+      deny_event(request, :files, event)
+      if event[:mode] == :write && (flags & File::WRONLY).zero?
+        deny_event(request, :files, event.merge(mode: :read))
+      end
     end
 
     def write_trace(request, syscall, metadata)
@@ -272,6 +332,7 @@ module Bonebed
         end
         [key, value]
       end
+      metadata = metadata.merge(cwd: @trace_normalizer.call(metadata[:cwd])) if metadata[:cwd]
       row = metadata.merge(t: Process.clock_gettime(Process::CLOCK_MONOTONIC) - @started_at, syscall: syscall.to_s).merge(event)
       row = @redactor.redact(row) if @redactor
       @trace_io.puts(JSON.generate(row))
@@ -291,7 +352,7 @@ module Bonebed
       end
       event = event.merge(parent: record ? @executables[pid] : nil)
       @collector.record_exec(event) if record
-      @collector.record_process({pid:, ppid: metadata[:ppid], path:, parent: event[:parent]})
+      @collector.record_process({pid:, ppid: metadata[:ppid], path:, parent: event[:parent], cwd: metadata[:cwd]})
       @executables[pid] = path
       trace_fields(request, event)
     end
@@ -381,8 +442,11 @@ module Bonebed
       event = Decoder::Openat.call(request, syscall:, cwd: @cwd)
       trace_fields(request, event)
       # ponytail: same-mount check drops failed read probes; retain attempts if targets gain separate mounts.
-      @collector.record_open(event) unless discardable_probe?(event)
-      record_write_kinds(event[:path], request.args.fetch((syscall == :open) ? 1 : 2))
+      @collector.record_open(event) if (!@writes_only || event[:mode] != :read) && !discardable_probe?(event)
+      flags = request.args.fetch((syscall == :open) ? 1 : 2)
+      record_write_kinds(event[:path], flags, request)
+      deny_open(request, event, flags)
+      inject_resolver(request, event[:path], flags) unless request.responded?
     rescue => error
       @collector.record_observer_error(syscall, error)
     ensure
@@ -397,22 +461,45 @@ module Bonebed
       !File.exist?(path)
     end
 
-    def record_write_kinds(path, flags)
+    def inject_resolver(request, path, flags)
+      return unless @resolver && path == "/etc/resolv.conf"
+
+      if (flags & (File::WRONLY | File::RDWR | File::CREAT | File::TRUNC | File::APPEND)).positive?
+        request.error!(Errno::EACCES)
+      elsif (flags & 0x10000).positive? # O_DIRECTORY
+        request.error!(Errno::ENOTDIR)
+      else
+        # Reopen the pinned inode so each injected descriptor has an independent offset.
+        File.open("/proc/self/fd/#{@resolver.fileno}", "rb") do |file|
+          request.add_fd!(file, newfd_flags: flags & 0x80000)
+        end
+      end
+    rescue
+      request.error!(Errno::EIO) unless request.responded?
+      raise
+    end
+
+    def record_write_kinds(path, flags, request)
       {create: File::CREAT, truncate: File::TRUNC, append: File::APPEND, rw: File::RDWR}.each do |operation, flag|
-        @collector.record(:changes, {operation:, path:}) if (flags & flag).positive?
+        next unless (flags & flag).positive?
+        @collector.record(:changes, {operation:, path:})
+        deny_event(request, :changes, {operation:, path:})
       end
     end
 
     def handle_connect(request)
+      decoded = false
       @collector.record_notification
       raise ArgumentError, "invalid sockaddr length" unless (2..Decoder::Connect::MAX_LENGTH).cover?(request.args.fetch(2))
 
       bytes = request.read(request.args.fetch(1), request.args.fetch(2))
       event = Decoder::Connect.call(bytes)
+      decoded = true
       trace_fields(request, event || {})
       identity = socket_identity(request, request.args.fetch(0))
       if event
         @collector.record_network(event)
+        deny_event(request, :network, event)
         @endpoints[identity] = event if identity
       elsif identity
         @endpoints.delete(identity)
@@ -421,7 +508,7 @@ module Bonebed
       @collector.record_observer_error(:connect, error)
     ensure
       unless request.responded?
-        @offline ? request.error!(Errno::ENETUNREACH) : request.continue!(unsafe: true)
+        (@offline || (@resolver && (!decoded || event&.fetch(:family) == "unix"))) ? request.error!(Errno::ENETUNREACH) : request.continue!(unsafe: true)
       end
     end
 
@@ -436,6 +523,7 @@ module Bonebed
       elsif File.executable?(event[:path])
         # ponytail: same-mount check filters failed PATH lookups; retain attempts if targets gain separate mounts.
         remember_exec(request, event)
+        deny_event(request, :exec, event)
       end
     rescue => error
       @collector.record_observer_error(:execve, error)
@@ -448,6 +536,7 @@ module Bonebed
       event = Decoder::Clone.call(request, syscall:) unless %i[fork vfork].include?(syscall)
       event ? @collector.record_thread(event) : @collector.record(:processes, {syscall: syscall.to_s})
       trace_fields(request, {kind: event ? "thread" : "process"})
+      deny_event(request, event ? :threads : :processes, event || {syscall: syscall.to_s})
       track_descendants(process_id(request)) if !event && request.valid?
     rescue => error
       @collector.record_observer_error(syscall, error)
@@ -480,6 +569,7 @@ module Bonebed
         event = Decoder::FileChange.call(request, syscall:, cwd: @cwd)
         trace_fields(request, event)
         @collector.record(:changes, event)
+        deny_event(request, :changes, event)
       end
     end
 
@@ -493,7 +583,9 @@ module Bonebed
         event = {path:, mode: write ? :write : :read}
         trace_fields(request, event)
         @collector.record_open(event) if (!@writes_only || write) && !discardable_probe?(event)
-        record_write_kinds(path, flags)
+        record_write_kinds(path, flags, request)
+        deny_open(request, event, flags)
+        inject_resolver(request, path, flags) unless request.responded?
       end
     end
 
@@ -504,18 +596,51 @@ module Bonebed
         argv, truncated = Decoder::Execve.read_arguments(request, request.args.fetch(2), limit: @argv_limit)
         env_keys = Decoder::Execve.read_arguments(request, request.args.fetch(3), limit: 256).first.map { |value| value.split("=", 2).first }.uniq.sort
         remember_exec(request, {path:, argv:, argv_truncated: truncated, env_keys:, syscall: "execveat"})
+        deny_event(request, :exec, {path:, argv:, syscall: "execveat"})
       end
     end
 
     def handle_suspicious(request, syscall)
       observe(request, syscall) do
-        if syscall == :unshare && @namespace_bootstrap
+        if syscall == :kill
+          handle_kill(request)
+        elsif syscall == :unshare && @namespace_bootstrap
           @namespace_bootstrap = false
         else
           @collector.record(:suspicious, {syscall: syscall.to_s})
+          deny_event(request, :suspicious, {syscall: syscall.to_s})
         end
-        request.error!(Errno::ENOSYS) if syscall == :io_uring_setup
+        request.error!(Errno::ENOSYS) if syscall == :io_uring_setup && !request.responded?
       end
+    end
+
+    def handle_kill(request)
+      pid, signal = request.args.first(2).map { |value| [value & 0xffffffff].pack("L").unpack1("l") }
+      trace_fields(request, {target_pid: pid, signal:, probe: signal.zero?})
+      return if signal.zero? || own_signal_target?(request, pid)
+
+      target = if pid.positive?
+        "<pid>"
+      elsif pid.zero?
+        "current_process_group"
+      elsif pid == -1
+        "all"
+      else
+        "<pgid>"
+      end
+      event = {syscall: "kill", signal:, target_pid: target}
+      @collector.record(:suspicious, event)
+      deny_event(request, :suspicious, event)
+    end
+
+    def own_signal_target?(request, pid)
+      return false unless pid.positive?
+      caller = process_id(request)
+      return true if pid == caller
+      status = File.read("/proc/#{pid}/status")
+      status[/^Tgid:\s+(\d+)/, 1].to_i == caller
+    rescue SystemCallError
+      false
     end
 
     def handle_bind(request)
@@ -527,6 +652,7 @@ module Bonebed
         identity = socket_identity(request, request.args.fetch(0))
         @bindings[identity] = event if event && identity
         @collector.record(:listen, event.merge(syscall: "bind")) if event
+        deny_event(request, :listen, event) if event
       end
     end
 
@@ -535,10 +661,12 @@ module Bonebed
         event = @bindings[socket_identity(request, request.args.fetch(0))] || {family: "unknown"}
         trace_fields(request, event)
         @collector.record(:listen, event.merge(syscall: "listen"))
+        deny_event(request, :listen, event)
       end
     end
 
     def handle_datagram(request, syscall)
+      decoded = false
       @collector.record_notification
       messages = []
       Decoder::Datagram.call(request, syscall:).each do |message|
@@ -546,17 +674,22 @@ module Bonebed
         next unless event
 
         @collector.record_network(event)
+        deny_event(request, :network, event)
         messages << event.merge(fd: message[:fd])
         if event[:port] == 53
-          Decoder::DNS.questions(message[:payload]).each { |name| @collector.record(:dns, {name:}) }
+          Decoder::DNS.questions(message[:payload]).each do |name|
+            @collector.record(:dns, {name:})
+            deny_event(request, :dns, {name:})
+          end
         end
       end
       trace_fields(request, {messages:})
+      decoded = true
     rescue => error
       @collector.record_observer_error(syscall, error)
     ensure
       unless request.responded?
-        @offline ? request.error!(Errno::ENETUNREACH) : request.continue!(unsafe: true)
+        (@offline || (@resolver && (!decoded || messages.any? { |event| event[:family] == "unix" }))) ? request.error!(Errno::ENETUNREACH) : request.continue!(unsafe: true)
       end
     end
 

@@ -1,0 +1,292 @@
+# frozen_string_literal: true
+
+require "cgi"
+require_relative "../result_store"
+require_relative "tabular"
+
+module Bonebed
+  module Formatter
+    class Markdown
+      def self.call(manifests, policy: nil)
+        new(manifests, policy:).call
+      end
+
+      def initialize(manifests, policy: nil)
+        @manifests = manifests
+        @entries = Tabular.entries(manifests, policy:)
+      end
+
+      def call
+        sections = [findings_section, target_details]
+        ["# Bonebed findings", contents(sections), *sections].join("\n\n") << "\n"
+      end
+
+      def survey(successful:, failed:)
+        @successful = successful
+        @failed = failed
+        successful = successful.size
+        lines = [
+          "# Bonebed survey",
+          "",
+          "- Manifests: #{@manifests.size}",
+          "- Successful: #{successful}",
+          "- With errors: #{@manifests.size - successful}",
+          "- Require phase with IP sockets: #{network_count("require", %w[inet inet6])}",
+          "- Require phase with Unix sockets: #{network_count("require", %w[unix])}",
+          "- Install phase with IP sockets: #{network_count("install", %w[inet inet6])}",
+          "- Install phase with Unix sockets: #{network_count("install", %w[unix])}",
+          "",
+          findings_section,
+          target_details,
+          capability_matrix,
+          failures,
+          observer_failures,
+          successful_require_output,
+          ranking("Home files read", file_accesses("read", "$HOME/")),
+          ranking("Project files read", file_accesses("read", "$PWD/")),
+          ranking("Project files written", file_accesses("write", "$PWD/")),
+          network_by_target,
+          commands_by_target,
+          threads_by_target,
+          openat_ranking
+        ]
+        lines.insert(10, contents(lines))
+        lines.join("\n").rstrip << "\n"
+      end
+
+      private
+
+      def contents(sections)
+        headings = sections.grep(String).flat_map { |section| section.scan(/^## (.+)$/).flatten }
+        "## Contents\n\n" + headings.map { |title| "- [#{title}](##{title.downcase.gsub(/[^a-z0-9 ]/, "").tr(" ", "-")})" }.join("\n") + "\n"
+      end
+
+      def findings_section
+        "## Findings\n\nFindings are ordered by policy severity. Unmatched capabilities have no assigned severity; absence of findings is not a safety verdict.\n\n" + findings_table(@entries)
+      end
+
+      def findings_table(entries)
+        headers = Tabular::HEADERS
+        (["| #{headers.join(" | ")} |", "| #{headers.map { "---" }.join(" | ")} |"] +
+          Tabular.rows(entries).map { |row| "| #{row.map { |value| cell(value) }.join(" | ")} |" }).join("\n") + "\n"
+      end
+
+      def target_details
+        details = @entries.sort_by do |manifest, findings|
+          [-findings.map { |finding| Tabular.severity(finding) }.max.to_i, label(manifest)]
+        end.map do |manifest, findings|
+          keys = CapabilityKeys.call(manifest)
+          capabilities = keys.empty? ? "None observed." : keys.map { |key| "- `#{cell(key)}`" }.join("\n")
+          <<~MARKDOWN
+            <details>
+            <summary>#{label(manifest)}</summary>
+
+            #{findings_table([[manifest, findings]])}
+            **Observed capabilities** (including capabilities without a matching policy rule)
+
+            #{capabilities}
+
+            Target errors: #{cell(Array(manifest["errors"]).join("; "))}
+
+            Observer errors: #{cell(Array(manifest["observer_errors"]).join("; "))}
+
+            </details>
+          MARKDOWN
+        end
+        "## Target details\n\n#{details.join("\n")}\n"
+      end
+
+      def capability_matrix
+        rows = @manifests.map do |manifest|
+          flags = manifest["capabilities"] || ResultStore.capabilities(manifest)
+          home = flags.values_at("home_read", "home_write").any?(true)
+          values = [flags["network"], flags["dns"], flags["exec"], flags["process"], home,
+            flags["project_write"], flags["native_extension"], flags["threads"], flags["plugin"]]
+          "| `#{label(manifest)}` | #{values.map { |value|
+            if value.nil?
+              "?"
+            else
+              value ? "✓" : "—"
+            end
+          }.join(" | ")} |"
+        end
+        "## Capabilities\n\n`?` means unavailable in this observation. Capabilities describe observed activity, not a safety verdict.\n\n| Survey target | Net | DNS | Exec | Process | Home | PWD | Native | Thread | Plugin |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n#{rows.join("\n")}\n"
+      end
+
+      def observer_failures
+        failed = @manifests.select { |manifest| !Array(manifest["observer_errors"]).empty? }
+        return "## Observer errors\n\nNone observed.\n" if failed.empty?
+
+        rows = failed.map { |manifest| "| `#{label(manifest)}` | #{cell(manifest.fetch("observer_errors").join("; "))} |" }
+        "## Observer errors\n\n| Survey target | Errors |\n| --- | --- |\n#{rows.join("\n")}\n"
+      end
+
+      def network_count(phase, families)
+        @manifests.count do |manifest|
+          manifest["phase"] == phase && manifest.fetch("network", []).any? { |entry| families.include?(entry["family"]) }
+        end
+      end
+
+      def failures
+        failed = @failed
+        return "## Failures\n\nNone observed.\n" if failed.empty?
+
+        rows = failed.map do |manifest|
+          errors = manifest.fetch("errors").dup
+          if errors.empty?
+            errors << if manifest.dig("target", "timed_out")
+              "target timed out"
+            elsif manifest.dig("target", "signal")
+              "target terminated by signal #{manifest.dig("target", "signal")}"
+            else
+              "target exited with status #{manifest.dig("target", "exit_status")}"
+            end
+          end
+          "| `#{label(manifest)}` | #{cell(errors.join("; "))} | #{cell(manifest.fetch("stdout", ""), limit: 500)} | #{cell(manifest.fetch("stderr", ""), limit: 500)} |"
+        end
+        details = failed.filter_map do |manifest|
+          stdout = manifest.fetch("stdout", "")
+          stderr = manifest.fetch("stderr", "")
+          next if stdout.empty? && stderr.empty?
+
+          <<~MARKDOWN
+            ### `#{label(manifest)}`
+
+            #### Stdout
+
+            #{output_block(stdout)}
+
+            #### Stderr
+
+            #{output_block(stderr)}
+          MARKDOWN
+        end
+        table = "## Failures\n\n| Survey target | Errors | Stdout | Stderr |\n| --- | --- | --- | --- |\n#{rows.join("\n")}\n"
+        return table if details.empty?
+
+        "#{table}\n<details>\n<summary>Full failure output</summary>\n\n#{details.join("\n")}\n</details>\n"
+      end
+
+      def file_accesses(mode, prefix)
+        counts = Hash.new(0)
+        @manifests.each do |manifest|
+          paths = manifest.dig("files", mode)
+          paths = paths.values.flatten if paths.is_a?(Hash)
+          Array(paths).each { |path| counts[path] += 1 if path.start_with?(prefix) }
+        end
+        counts
+      end
+
+      def successful_require_output
+        manifests = @successful.select do |manifest|
+          manifest["phase"] == "require" &&
+            !manifest.values_at("stdout", "stderr").all? { |value| value.to_s.empty? }
+        end
+        return "## Output from successful require targets\n\nNone observed.\n" if manifests.empty?
+
+        rows = manifests.map do |manifest|
+          "| `#{label(manifest)}` | #{cell(manifest.fetch("stdout", ""), limit: 500)} | #{cell(manifest.fetch("stderr", ""), limit: 500)} |"
+        end
+        "## Output from successful require targets\n\n| Survey target | Stdout | Stderr |\n| --- | --- | --- |\n#{rows.join("\n")}\n"
+      end
+
+      def network_by_target
+        counts = Hash.new(0)
+        @manifests.each do |manifest|
+          manifest.fetch("network", []).each do |entry|
+            counts[[label(manifest), network_endpoint(entry)]] += entry.fetch("count", 1)
+          end
+        end
+        rows = counts.map { |(target, endpoint), count| [target, endpoint, count] }
+          .sort_by { |target, endpoint, count| [target, -count, endpoint] }
+        return "## Network attempts by survey target\n\nNone observed.\n" if rows.empty?
+
+        "## Network attempts by survey target\n\n| Survey target | Endpoint | Calls |\n| --- | --- | ---: |\n#{rows.map { |target, endpoint, count| "| `#{target}` | `#{cell(endpoint)}` | #{count} |" }.join("\n")}\n"
+      end
+
+      def network_endpoint(entry)
+        return "unix:#{entry.fetch("path")}" if entry["family"] == "unix"
+        return entry.fetch("family") unless entry.key?("addr")
+
+        address = (entry["family"] == "inet6") ? "[#{entry.fetch("addr")}]" : entry.fetch("addr")
+        "#{address}:#{entry.fetch("port")}"
+      end
+
+      def commands_by_target
+        counts = Hash.new(0)
+        @manifests.each do |manifest|
+          manifest.fetch("exec", []).each do |entry|
+            counts[[label(manifest), entry.fetch("path")]] += entry.fetch("count", 1)
+          end
+        end
+        rows = counts.map { |(target, command), count| [target, command, count] }
+          .sort_by { |target, command, count| [target, -count, command] }
+        return "## Commands observed by survey target\n\nNone observed.\n" if rows.empty?
+
+        summary = rows.group_by(&:first).map do |target, entries|
+          "| `#{target}` | #{entries.sum { |entry| entry.fetch(2) }} | #{entries.size} |"
+        end.join("\n")
+        details = rows.map { |target, command, count| "| `#{target}` | `#{cell(command)}` | #{count} |" }.join("\n")
+        <<~MARKDOWN
+          ## Commands observed by survey target
+
+          | Survey target | Calls | Unique commands |
+          | --- | ---: | ---: |
+          #{summary}
+
+          <details>
+          <summary>All command paths</summary>
+
+          | Survey target | Command | Count |
+          | --- | --- | ---: |
+          #{details}
+
+          </details>
+        MARKDOWN
+      end
+
+      def threads_by_target
+        counts = Hash.new(0)
+        @manifests.each do |manifest|
+          manifest.fetch("threads", []).each do |entry|
+            counts[[label(manifest), entry.fetch("syscall")]] += entry.fetch("count", 1)
+          end
+        end
+        rows = counts.map { |(target, syscall), count| [target, syscall, count] }
+          .sort_by { |target, syscall, count| [target, -count, syscall] }
+        return "## Thread creation syscalls by survey target\n\nNone observed.\n" if rows.empty?
+
+        "## Thread creation syscalls by survey target\n\n| Survey target | Syscall | Calls |\n| --- | --- | ---: |\n#{rows.map { |target, syscall, count| "| `#{target}` | `#{cell(syscall)}` | #{count} |" }.join("\n")}\n"
+      end
+
+      # ponytail: keep Markdown compact; full stdout and stderr remain in the JSON manifest.
+      def cell(value, limit: nil)
+        text = value.to_s.gsub(/\s+/, " ").strip
+        text = "—" if text.empty?
+        text = "#{text[0, limit]}…" if limit && text.length > limit
+        CGI.escapeHTML(text).gsub("`", "&#96;").gsub("|", "\\|").gsub("[", "&#91;").gsub("]", "&#93;")
+      end
+
+      def output_block(value)
+        value.lines(chomp: true).map { |line| "    #{line}" }.join("\n")
+      end
+
+      def ranking(title, counts)
+        rows = counts.sort_by { |name, count| [-count, name] }.first(10)
+        return "## #{title}\n\nNone observed.\n" if rows.empty?
+
+        "## #{title}\n\n| Item | Count |\n| --- | ---: |\n#{rows.map { |name, count| "| `#{cell(name)}` | #{count} |" }.join("\n")}\n"
+      end
+
+      def openat_ranking
+        ranking("Open calls after baseline", @manifests.to_h do |manifest|
+          [label(manifest), (manifest.dig("stats", "open_after_baseline") || manifest.dig("stats", "openat_after_baseline")).to_i]
+        end)
+      end
+
+      def label(manifest)
+        cell("#{manifest.dig("gem", "name")} #{manifest.dig("gem", "version")} (#{manifest["phase"]})")
+      end
+    end
+  end
+end

@@ -4,6 +4,7 @@ Run the safe, local scenarios in the Linux development container:
 
 ```sh
 bin/dev bundle exec rspec spec/adversarial_spec.rb
+bin/dev bundle exec rspec spec/sinkhole_spec.rb
 bin/dev bundle exec standardrb spec/adversarial_spec.rb spec/fixtures/gems/malicious
 ```
 
@@ -14,7 +15,7 @@ Each target gets a disposable HOME, project directory, GEM_HOME, temporary direc
 | Fixture | Phase | Verified behavior |
 | --- | --- | --- |
 | `credential-stealer` | require | Reads synthetic AWS and SSH files; both appear in notable paths, `sensitive_read` is true, and the default credential rule emits critical findings. |
-| `env-exfil` | require | Attempts a DNS question containing the synthetic GitHub token and a loopback HTTP connection under forced offline fallback. DNS intent and both destinations are recorded, sends are denied, and the DNS name is redacted with a canary hit. |
+| `env-exfil` | require | Under forced offline fallback, records denied DNS and HTTP attempts and redacts the synthetic GitHub token in DNS intent. A separate sinkhole run resolves the synthetic hostname to loopback, captures HTTP Host and POST body, and records redacted network intent with a canary hit. |
 | `fileless` | require | Copies the container's harmless `/bin/true` ELF into a memfd and executes it through `execveat`. Both syscalls are recorded, fileless-exec is critical, and the target exits successfully. |
 | `plugin-persist` | plugin | An installed `rubygems_plugin.rb` appends an inert comment to the disposable `.bashrc`; the plugin manifest reports home writing. |
 | `pwd-tamper` | require | Creates an inert pre-commit hook in the disposable project and changes its mode to `0700`; write and chmod events and the critical hook rule are asserted. |
@@ -32,8 +33,8 @@ The native probes obtain syscall numbers from the installed `seccomp-notify` arc
 
 ## Limits and recorded result
 
-The completed local run on Linux aarch64 with Ruby 4.0.6 passed **15 examples, 0 failures**. The suite is skipped on non-Linux hosts. The development container allows the inner seccomp observer to receive the probes; an outer filter can deny a syscall before the observer sees it, particularly io_uring. This result does not establish successful execution on every kernel, CPU architecture, or restricted host.
+The completed local run on Linux aarch64 with Ruby 4.0.6 passed **16 adversarial examples, 0 failures**. Running these together with the sinkhole and collector specs passed **33 examples, 0 failures**. The adversarial suite is skipped on non-Linux hosts. The development container allows the inner seccomp observer to receive the probes; an outer filter can deny a syscall before the observer sees it, particularly io_uring. This result does not establish successful execution on every kernel, CPU architecture, or restricted host.
 
-The DNS fixture constructs a valid DNS question directly rather than invoking a public resolver. Its HTTP connection is deliberately refused before the POST body is sent. The suite therefore does **not** validate an HTTP sinkhole, TLS interception, HTTP hostname/body extraction, or `network_intent`: these remain outside this implementation. Canary redaction is verified for DNS intent, not an unobserved HTTP payload.
+The offline DNS fixture constructs a valid DNS question directly. The sinkhole variant also uses the Ruby socket resolver against a fake resolver injected through seccomp ADDFD. The sinkhole specs independently exercise real isolated HTTP and TLS sockets, split HTTP bodies, TLS ClientHello SNI, absent external routes, target status transport, worker capability removal, result authentication, and fail-closed namespace setup. HTTP samples are bounded to 4 KiB; TLS payloads are not decrypted and the TLS handshake ends with an alert. Arbitrary external IP addresses and ports, TCP DNS, encrypted DNS, and chunked body reassembly are not covered. See [sinkhole behavior and limits](sinkhole.md).
 
 A detected syscall is an observed attempt, not proof that the requested operation succeeded or that a gem is malicious. These synthetic scenarios verify the listed observation paths; they are not a general sandbox escape or malware coverage guarantee.

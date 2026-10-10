@@ -3,6 +3,7 @@
 require "bonebed/bundler_plugin"
 require "open3"
 require "rubygems/package"
+require "bonebed/local_gem_repository"
 
 RSpec.describe Bonebed::BundlerPlugin do
   around do |example|
@@ -140,6 +141,16 @@ RSpec.describe Bonebed::BundlerPlugin do
     expect { gate.check! }.to raise_error(described_class::Rejected, /policy/)
   end
 
+  it "requires a separate Bundler plugin observation and approval when the package declares plugins.rb" do
+    save("install", gem: {"name" => "demo", "version" => "1.0", "platform" => "ruby", "bundler_plugin" => true})
+    expect { gate.check! }.to raise_error(described_class::Rejected, /bundler_plugin/)
+    @approvals["gems"]["demo"]["phases"]["bundler_plugin"] = []
+    write_approvals
+    expect { gate.check! }.to raise_error(described_class::Rejected, /bundler_plugin.*unobserved/)
+    save("bundler_plugin")
+    expect(gate.check!).to eq(1)
+  end
+
   it "rejects path, git, and alternative registry sources" do
     original = File.read(@lock)
     [original.sub("GEM\n  remote: https://rubygems.org/", "PATH\n  remote: ."),
@@ -169,16 +180,32 @@ RSpec.describe Bonebed::BundlerPlugin do
     expect { checker.check_spec!(spec) }.to raise_error(described_class::Rejected, /not approved/)
   end
 
-  def install_with_hook(frozen: true)
-    source = File.expand_path("..", __dir__)
+  def install_with_hook(frozen: true, plugin_source: nil)
+    repository = plugin_repository
+    plugin_source ||= "file://#{repository}"
     program = <<~RUBY
       installation_path = ENV.delete("BUNDLE_PATH")
       require "bundler"
       require "bundler/cli"
       require "rubygems/installer"
-      Gem::Installer.at(#{Gem.loaded_specs.fetch("seccomp-notify").cache_file.inspect},
+      require "rubygems/remote_fetcher"
+      require "bundler/fetcher"
+      # Fail before opening a connection if plugin bootstrap ever falls back to a registry.
+      Gem::RemoteFetcher.prepend(Module.new do
+        def fetch_path(uri, *)
+          raise SecurityError, "network fetch forbidden in plugin fixture: \#{uri}" unless uri.to_s.start_with?("file:")
+          super
+        end
+      end)
+      Bundler::Fetcher::Downloader.prepend(Module.new do
+        def fetch(uri, *)
+          raise SecurityError, "network fetch forbidden in plugin fixture: \#{uri}" unless uri.to_s.start_with?("file:")
+          super
+        end
+      end)
+      Gem::Installer.at(#{Gem::Specification.find_by_name("seccomp-notify").cache_file.inspect},
         install_dir: Bundler::Plugin.root.to_s, document: []).install
-      Bundler::Plugin.install(["bonebed"], path: #{source.inspect})
+      Bundler::Plugin.install(["bonebed"], source: [#{plugin_source.inspect}], version: #{Bonebed::VERSION.inspect})
       raise "observer loaded in Bundler" if $LOADED_FEATURES.any? { |path| path.include?("seccomp") }
       ENV["BUNDLE_PATH"] = installation_path
       Bundler.reset!
@@ -189,6 +216,20 @@ RSpec.describe Bonebed::BundlerPlugin do
                    "BUNDLE_PATH" => File.join(@root, "installed"), "BUNDLE_FROZEN" => frozen.to_s, "BUNDLE_PLUGINS" => "true",
                    "BUNDLE_SILENCE_ROOT_WARNING" => "true", "BUNDLE_DISABLE_VERSION_CHECK" => "true"}
     Open3.capture3(environment, RbConfig.ruby, "-e", program, chdir: @root, unsetenv_others: true)
+  end
+
+  def plugin_repository
+    repository = File.join(@root, "plugin-repository")
+    return repository if File.directory?(repository)
+
+    FileUtils.mkdir_p(File.join(repository, "gems"))
+    source = File.expand_path("..", __dir__)
+    Dir.chdir(source) do
+      specification = Gem::Specification.load("bonebed.gemspec")
+      Gem::Package.build(specification, false, false, File.join(repository, "gems", "bonebed-#{Bonebed::VERSION}.gem"))
+    end
+    Bonebed::LocalGemRepository.build(repository, [File.join(repository, "gems", "bonebed-#{Bonebed::VERSION}.gem")])
+    repository
   end
 
   def cache_fixture
@@ -225,5 +266,12 @@ RSpec.describe Bonebed::BundlerPlugin do
     expect(status.success?).to be(false), stdout
     expect(stderr).to include("Bonebed check failed")
     expect(Dir[File.join(@root, "installed/**/specifications/demo-1.0.gemspec")]).to be_empty
+  end
+
+  it "rejects a network source before the fixture can download or install a public plugin" do
+    stdout, stderr, status = install_with_hook(plugin_source: "https://rubygems.org/")
+    expect(status.success?).to be(false), stdout
+    expect(stderr).to include("SecurityError", "network fetch forbidden in plugin fixture")
+    expect(Dir[File.join(@root, ".bundle/plugin/gems/bonebed-*")]).to be_empty
   end
 end

@@ -35,7 +35,13 @@ RSpec.describe "Appendix D adversarial fixtures" do
     expect(result["canary_hits"]).to include(include("source" => "env:GITHUB_TOKEN", "seen_in" => "dns"))
     expect(result["network"]).to include(include("addr" => "127.0.0.1", "port" => 53), include("addr" => "127.0.0.1", "port" => 9))
     expect(result["stdout"]).to include("dns blocked", "http blocked")
-    expect(result).not_to have_key("network_intent")
+    expect(result.fetch("network_intent", [])).to be_empty
+  end
+
+  it "captures the env-exfil HTTP hostname and canary inside the sinkhole" do
+    result = observe("env-exfil", sinkhole: true, env: {"BONEBED_FIXTURE_SINKHOLE" => "1"})
+    expect(result.fetch("network_intent")).to include(include("protocol" => "http", "host" => "[CANARY:env:GITHUB_TOKEN].example.invalid", "path" => "/"))
+    expect(result["canary_hits"]).to include(include("source" => "env:GITHUB_TOKEN", "seen_in" => "network_intent"))
   end
 
   it "executes only the local true ELF via memfd and execveat" do
@@ -145,7 +151,7 @@ RSpec.describe "Appendix D adversarial fixtures" do
     expect(result["stdout"]).to include("ENOSYS")
   end
 
-  def observe(name, phase: "require", env: {}, offline: false, profile: "dev")
+  def observe(name, phase: "require", env: {}, offline: false, sinkhole: false, profile: "dev")
     source = File.join(__dir__, "fixtures", "gems", "malicious", name)
     specification = Gem::Specification.load(File.join(source, "bonebed-fixture-#{name}.gemspec"))
     raise "missing fixture #{name}" unless specification
@@ -162,7 +168,7 @@ RSpec.describe "Appendix D adversarial fixtures" do
       environment.env.merge!(env)
       FileUtils.cp_r(File.join(source, "."), environment.prefetch)
       package = Dir.chdir(environment.prefetch) { Gem::DefaultUserInteraction.use_ui(Gem::SilentUI.new) { Gem::Package.build(specification) } }
-      options = {quiet_target: true, timeout: 10, offline:}
+      options = {quiet_target: true, timeout: 10, offline:, sinkhole:}
       installed = Bonebed::Phase::Install.call(environment, [File.join(environment.prefetch, package)], **options)
       expect(installed.errors).to be_empty, installed.snapshot(environment.normalizer)[:stderr]
       collector = case phase
@@ -173,7 +179,7 @@ RSpec.describe "Appendix D adversarial fixtures" do
       snapshot = collector.snapshot(environment.normalizer)
       expect(snapshot[:errors]).to be_empty, snapshot[:stderr]
       expect(snapshot[:observer_errors].reject { |error| error.start_with?("isolation:") }).to be_empty
-      baseline = @baseline.capture(phase:, offline:, env_profile: profile)
+      baseline = @baseline.capture(phase:, offline:, sinkhole:, env_profile: profile)
       manifest = Bonebed::ManifestBuilder.call(specification.name, specification.version.to_s, phase, snapshot, baseline,
         specifications: [specification], run: {"mode" => {"offline" => offline, "env_profile" => profile}})
       manifest = environment.honeypot.redact(manifest)

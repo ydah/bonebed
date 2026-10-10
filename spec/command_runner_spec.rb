@@ -74,7 +74,7 @@ RSpec.describe Bonebed::CommandRunner do
     policy = File.join(@root, "policy.yml")
     File.write(policy, "{}")
     baseline_result = baseline.capture
-    expect(baseline).to receive(:capture).with(phase: "require", offline: true, writes_only: true, env_profile: "dev", enforce: policy).and_return(baseline_result)
+    expect(baseline).to receive(:capture).with(phase: "require", offline: true, sinkhole: false, writes_only: true, env_profile: "dev", enforce: policy).and_return(baseline_result)
     allow(Bonebed::Enforcement).to receive(:load).with(policy, anything).and_return(read_paths: [], write_paths: [])
     expect(Bonebed::Session).to receive(:new).with(["true"], hash_including(unsetenv_others: true, offline: true, timeout: 2,
       output_limit: 12, argv_limit: 3, writes_only: true, enforcement: {read_paths: [], write_paths: []})).and_return(double(run: collector))
@@ -83,16 +83,39 @@ RSpec.describe Bonebed::CommandRunner do
     runner.run(["true"])
   end
 
+  it "passes sinkhole to both the baseline and target session and records its mode" do
+    result = baseline.capture
+    expect(baseline).to receive(:capture).with(hash_including(sinkhole: true, offline: false)).and_return(result)
+    expect(Bonebed::Session).to receive(:new).with(["true"], hash_including(sinkhole: true, offline: false))
+      .and_return(double(run: Bonebed::Collector.new))
+    observed = described_class.new(results_dir: File.join(@root, "results"), baseline:, sinkhole: true)
+    path = observed.run(["true"])
+    expect(JSON.parse(File.read(path)).dig("run", "mode", "sinkhole")).to be(true)
+  end
+
+  it "uses the same deny context for baseline and target and records its identity" do
+    policy = File.join(@root, "deny.yml")
+    File.write(policy, "{}")
+    context = {"config" => {}, "name" => "command", "phase" => "exec"}
+    result = baseline.capture
+    expect(baseline).to receive(:capture).with(hash_including(deny: context)).and_return(result)
+    expect(Bonebed::Session).to receive(:new).with(["true"], hash_including(deny: hash_including(context))).and_return(double(run: Bonebed::Collector.new))
+    observed = described_class.new(results_dir: File.join(@root, "results"), baseline:, deny: policy)
+    path = observed.run(["true"])
+    expect(JSON.parse(File.read(path)).dig("run", "mode", "deny")).to eq(Bonebed::DenyPolicy.digest({}))
+    expect { described_class.new(deny: policy, writes_only: true) }.to raise_error(ArgumentError, /writes.only/)
+  end
+
   it "requires the CLI separator and forwards literal arguments after it" do
     allow(Bonebed::Doctor).to receive(:container?).and_return(true)
     expect { Bonebed::CLI.run_command(%w[ruby -e puts]) }.to raise_error(ArgumentError, /--/)
     expect { Bonebed::CLI.run_command(%w[--repeat 2 -- ruby]) }.to raise_error(ArgumentError, /repeat/)
     expect { Bonebed::CLI.run_command(%w[--jobs 2 -- ruby]) }.to raise_error(ArgumentError, /jobs/)
     fake = double(run: "manifest.json", last_errors: [], last_observer_errors: [])
-    expect(described_class).to receive(:new).with(hash_including(timeout: 2, env_profile: "ci")).and_return(fake)
+    expect(described_class).to receive(:new).with(hash_including(timeout: 2, env_profile: "ci", sinkhole: true)).and_return(fake)
     expect(fake).to receive(:run).with(["ruby", "-e", "puts 1"]).and_return("manifest.json")
     allow(Bonebed::CLI).to receive(:summarize)
-    expect { expect(Bonebed::CLI.run_command(["--timeout", "2", "--env-profile", "ci", "--", "ruby", "-e", "puts 1"])).to eq(0) }
+    expect { expect(Bonebed::CLI.run_command(["--timeout", "2", "--env-profile", "ci", "--sinkhole", "--", "ruby", "-e", "puts 1"])).to eq(0) }
       .to output("manifest.json\n").to_stdout
   end
 end

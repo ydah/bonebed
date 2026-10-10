@@ -35,7 +35,8 @@ module Bonebed
     end
 
     def normalizer
-      PathNormalizer.new(home: @home, cwd: @project, tmpdir: @root, gem_paths: [@gem_home, *Gem.path])
+      PathNormalizer.new(home: @home, cwd: @project, tmpdir: @root,
+        gem_paths: [@gem_home, File.join(@root, "bundler-observation", "plugin"), *Gem.path])
     end
 
     def copy_gems(specification)

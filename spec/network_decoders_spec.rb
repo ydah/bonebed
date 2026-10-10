@@ -85,4 +85,35 @@ RSpec.describe Bonebed::Decoder::Datagram do
     target = request([9, 100, 0], 100 => "\0" * 55)
     expect { described_class.call(target, syscall: :sendmsg) }.to raise_error(ArgumentError, /short/)
   end
+
+  it "bounds arbitrary msghdr memory reads and rejects malformed or truncated structures" do
+    random = Random.new(20261010)
+    500.times do
+      reads = 0
+      bytes = 0
+      target = double("fuzz request", args: [9, random.rand(1..65535), random.rand(0..32)])
+      allow(target).to receive(:read) do |_address, length|
+        reads += 1
+        bytes += length
+        expect(length).to be_between(1, described_class::MAX_PAYLOAD)
+        expect(reads).to be <= 16 * 34
+        expect(bytes).to be <= 16 * (56 + 128 + 16 * 16 + 4096)
+        data = if length == described_class::MSGHDR_SIZE
+          header(name: [0, 100].sample(random:), length: random.rand(0..150), count: [0, 1, 16, 2**64 - 1].sample(random:))
+        elsif length == 16
+          [300, [0, 1, 4096, 2**64 - 1].sample(random:)].pack("Q<2")
+        else
+          random.bytes(length)
+        end
+        random.rand(4).zero? ? data.byteslice(0, random.rand(length)) : data
+      end
+      begin
+        events = described_class.call(target, syscall: [:sendmsg, :sendmmsg].sample(random:))
+        expect(events.size).to be <= described_class::MAX_MESSAGES
+        expect(events).to all(satisfy { |event| event.fetch(:payload).bytesize <= described_class::MAX_PAYLOAD })
+      rescue ArgumentError
+        # Invalid pointer contents are expected; unexpected decoder exceptions fail this example.
+      end
+    end
+  end
 end

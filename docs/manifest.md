@@ -18,13 +18,27 @@ for removal at Bonebed 1.0; migrate old results before upgrading then.
 
 Files are stored under `RESULTS/PHASE/NAME/VERSION-PLATFORM+IDENTITY_HASH.json`. The SHA-256 suffix
 covers phase, gem identity, require path, observation settings, repetition group/index, and an explicit command or gem executable invocation when present,
-including missing values. Different require paths, platforms, or modes cannot overwrite each other's
+including the observed Ruby version and CPU architecture and any missing values. Different require paths, runtimes, platforms, or modes cannot overwrite each other's
 observations. A missing platform is displayed as `unknown`.
 The readable filename is only a convenience; readers use the identity inside the document.
 
 Writes use a temporary file in the destination directory followed by an atomic rename. Repeating
 the same identity replaces its previous result. Survey resume checks target success, name, phase,
-and any requested version, platform, require path, or mode. Observer errors do not change target success.
+and any requested version, platform, require path, or mode. Recorded Ruby/architecture metadata must
+match the current runtime for resume. Observer errors do not change target success, but fatal
+`observation_failed` results never satisfy resume checks.
+
+`files.self_write`, when present, is the subset of `files.write` inside the selected gem's own
+directory. These paths remain in ordinary write capabilities and policy checks; the classification
+does not suppress the attempted writes or duplicate their counts.
+
+Process-tree rows retain normalized `cwd` transitions. When that directory is inside a package from
+the recorded dependency closure, `attribution` names its gem/version with `source: "cwd"`. This helps
+identify extconf, make, compiler and child commands during local installs and aggregate bundle
+installs. It is a directory-based inference: the target can change its working directory, and one
+process can load several gems. Unmatched directories remain unattributed. Aggregated file/network
+capabilities are still for the whole observation; they are not exact per-dependency execution counts.
+Trace rows also include the normalized working directory when procfs makes it available.
 Incomplete or unreadable JSON is not a successful cached observation.
 
 `bonebed migrate RESULTS` creates v2 documents in this layout while retaining the original v1 files.
@@ -38,6 +52,8 @@ preferred result for each identity. Migrated v2 results supersede v1 originals; 
 file wins. Memory grows with the path index and one manifest, rather than all captured output. Run it
 against a stable snapshot when a reproducible aggregate is required. Unknown capability values remain
 separate from both observed and not-observed counts; observer errors have their own count.
+For historical results with no recorded target status, `successful` means no recorded target failure,
+not a verified successful exit.
 
 ## Fields
 
@@ -46,8 +62,8 @@ separate from both observed and not-observed counts; observer errors have their 
 | `tool` | Bonebed and seccomp-notify versions used for observation |
 | `run` | Shared run ID, start timestamp, and observation mode; phases from one run can share the ID |
 | `run.repeat`, `stability` | Optional sample group/index/count and complete-group stable/flaky capability keys |
-| `gem` | Name, resolved version, platform, require path, package SHA-256, extensions, executables, and RubyGems plugin presence |
-| `phase` | Observed phase: `install`, `require`, `plugin`, or command `exec` |
+| `gem` | Name, resolved version, platform, require path, package SHA-256, extensions, executables, and separate `rubygems_plugin` / `bundler_plugin` presence flags |
+| `phase` | Observed phase: `install`, `require`, RubyGems `plugin`, `bundler_plugin`, or command `exec` |
 | `environment` | Ruby version, architecture, kernel, startup baseline identifier, and optional cleanup diagnostics |
 | `target` | Target `exit_status`, terminating `signal`, and `timed_out` |
 | `capabilities` | Boolean summaries of observed behavior; unknown historical values are `null` |
@@ -103,6 +119,16 @@ In cgroup mode, `completed: true` means the dedicated subtree became unpopulated
 it cannot rule out earlier cgroup migrations. Tracked fallback leaves `completed` unknown (`null`)
 and describes why delegated cleanup was unavailable. Actual cleanup failures also appear in
 `observer_errors`. See [the cleanup threat model](threat-model.md#process-tree-cleanup-and-cgroup-delegation).
+
+## Sinkhole intent
+
+`network_intent` is an additive array of decoded HTTP/TLS attempts. HTTP entries contain `protocol`,
+`host`, `method`, `path`, a bounded `sample`, and `count`. TLS entries contain `protocol`, `host` (SNI),
+and `count`. Samples are redacted by the same honeypot token matching used for other manifest fields;
+matching `canary_hits` identify `network_intent` as their source field. The mode records
+`sinkhole: true` and runtime isolation `sinkhole_namespace`. Missing historical `sinkhole` is treated
+as false for lookup. Sinkhole and ordinary/offline observations do not share baselines or resume
+identities. See [sinkhole observations](sinkhole.md) for protocol coverage and bounds.
 Gem observation trace names include the requested prefix, gem, version, run UUID, and phase, avoiding
 overwrites between workers and repeated runs.
 

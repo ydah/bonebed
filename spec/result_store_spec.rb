@@ -98,15 +98,41 @@ RSpec.describe Bonebed::ResultStore do
       store = described_class.new(directory)
       manifest = described_class.upgrade(legacy_manifest)
       mode = {"offline" => false, "honeypot" => true, "env_profile" => "dev", "writes_only" => false}
-      modes = [mode, mode.merge("offline" => true), mode.merge("env_profile" => "ci"),
-        mode.merge("writes_only" => true), mode.merge("honeypot" => false), mode.merge("enforce" => "policy-a")]
+      modes = [mode, mode.merge("offline" => true), mode.merge("sinkhole" => true), mode.merge("env_profile" => "ci"),
+        mode.merge("writes_only" => true), mode.merge("honeypot" => false), mode.merge("enforce" => "policy-a"), mode.merge("deny" => "policy-a")]
       paths = modes.map { |entry| store.write(manifest.merge("run" => {"mode" => entry})) }
       expect(paths.uniq.size).to eq(modes.size)
       expect(described_class.read(directory).size).to eq(modes.size)
       expect(store.exists?("rack", phase: "require", mode: mode.merge("enforce" => "policy-b"))).to be(false)
       expect(store.exists?("rack", phase: "require", mode: mode)).to be(true)
       expect(store.write(manifest.merge("run" => {"mode" => mode.merge("isolation" => "namespace")}))).to eq(paths.first)
+      expect(store.write(manifest.merge("run" => {"mode" => mode.merge("sinkhole" => false)}))).to eq(paths.first)
     end
+  end
+
+  it "rejects malformed sinkhole intent and mode metadata" do
+    manifest = described_class.upgrade(legacy_manifest)
+    valid = {"protocol" => "http", "host" => "example.test", "path" => "/", "method" => "GET", "count" => 1}
+    expect(described_class.valid?(manifest.merge("network_intent" => [valid]))).to be(true)
+    expect(described_class.valid?(manifest.merge("network_intent" => [valid.except("count")]))).to be(true)
+    expect(described_class.capabilities(manifest.merge("network_intent" => [valid]))).to include("network" => true)
+    [nil, {}, [nil], [valid.merge("protocol" => "ftp")], [valid.merge("host" => "")],
+      [valid.merge("count" => 0)], [valid.merge("path" => [])], [valid.merge("sample" => {})]].each do |intent|
+      expect(described_class.valid?(manifest.merge("network_intent" => intent))).to be(false)
+    end
+    expect(described_class.valid?(manifest.merge("run" => {"mode" => {"sinkhole" => "true"}}))).to be(false)
+  end
+
+  it "validates explicit denial evidence and policy mode metadata" do
+    manifest = described_class.upgrade(legacy_manifest)
+    event = {"syscall" => "openat", "capability" => "file:read:$HOME/.aws/credentials", "rule_id" => "credential-read", "severity" => "critical", "count" => 1}
+    expect(described_class.valid?(manifest.merge("denied" => [event]))).to be(true)
+    expect(schema.validate(manifest.merge("denied" => [event])).to_a).to be_empty
+    [{"count" => 0}, {"severity" => "unknown"}, {"capability" => ""}].each do |invalid|
+      expect(described_class.valid?(manifest.merge("denied" => [event.merge(invalid)]))).to be(false)
+    end
+    expect(described_class.valid?(manifest.merge("denied" => [event.except("count")]))).to be(false)
+    expect(described_class.valid?(manifest.merge("run" => {"mode" => {"deny" => true}}))).to be(false)
   end
 
   it "keeps distinct command argument lists separate" do
@@ -117,6 +143,23 @@ RSpec.describe Bonebed::ResultStore do
       second = store.write(manifest.merge("command" => ["ruby", "second.rb"]))
       expect(first).not_to eq(second)
       expect(described_class.read(directory).size).to eq(2)
+    end
+  end
+
+  it "preserves observations from different Ruby runtimes and architectures" do
+    Dir.mktmpdir do |directory|
+      store = described_class.new(directory)
+      manifest = described_class.upgrade(legacy_manifest)
+      environments = [{"ruby" => "3.3.9", "arch" => "x86_64"}, {"ruby" => "4.0.6", "arch" => "x86_64"},
+        {"ruby" => "4.0.6", "arch" => "aarch64"}]
+      paths = environments.map { |environment| store.write(manifest.merge("environment" => environment)) }
+      expect(paths.uniq.size).to eq(3)
+      expect(described_class.read(directory).map { |item| item.fetch("environment") }).to match_array(environments)
+      expect(store.matching("rack", phase: "require").all? { |item| item.dig("environment", "ruby") == RUBY_VERSION && item.dig("environment", "arch") == RbConfig::CONFIG.fetch("host_cpu") }).to be(true)
+      stale = manifest.merge("environment" => {"ruby" => "0.0.0", "arch" => RbConfig::CONFIG.fetch("host_cpu")}, "gem" => manifest.fetch("gem").merge("name" => "stale"))
+      store.write(stale)
+      expect(store.exists?("stale", phase: "require")).to be(false)
+      expect(described_class.valid?(manifest.merge("environment" => []))).to be(false)
     end
   end
 

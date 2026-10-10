@@ -41,6 +41,16 @@ jobs:
   container:
     needs: publish
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ruby: '3.3'
+            image: ruby:3.3@sha256:a91b6ac1b9b18d33812480856e4bc39c5c492ff9c6cc810d916cc3f0cc1d0eab
+          - ruby: '3.4'
+            image: ruby:3.4@sha256:4116b6119a53dfef69f4cd591784a1aff9e1095b2ef4eccd865e46906e90be36
+          - ruby: '4.0'
+            image: ruby:4.0.6@sha256:8dc3950712ad2078bdd275b890419ba2fd3aab5a0653b291a7325f0d8a24ca05
     timeout-minutes: 30
     environment: release
     permissions:
@@ -64,16 +74,22 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
+          RUBY_VERSION: ${{ matrix.ruby }}
         run: |
           printf 'name=ghcr.io/%s\n' "${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          image="ghcr.io/${REPOSITORY,,}:${RELEASE_TAG#v}"
+          printf 'tags<<TAGS\n%s-ruby%s\n' "$image" "$RUBY_VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$RUBY_VERSION" = '4.0' ]; then printf '%s\n' "$image" >> "$GITHUB_OUTPUT"; fi
+          printf 'TAGS\n' >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         id: build
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.image.outputs.name }}:${{ steps.image.outputs.tag }}
+          tags: ${{ steps.image.outputs.tags }}
+          build-args: RUBY_IMAGE=${{ matrix.image }}
           provenance: mode=max
           sbom: true
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
