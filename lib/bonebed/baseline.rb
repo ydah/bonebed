@@ -17,7 +17,7 @@ require_relative "enforcement"
 
 module Bonebed
   class Baseline
-    CACHE_VERSION = 11
+    CACHE_VERSION = 12
     Result = Struct.new(:id, :observation)
 
     def initialize(cache_dir: ENV.fetch("BONEBED_BASELINE_DIR", ".bonebed/baselines"), timeout: 30)

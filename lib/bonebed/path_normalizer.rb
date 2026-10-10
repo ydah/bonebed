@@ -14,13 +14,13 @@ module Bonebed
     def call(path)
       path = File.expand_path(path, @cwd) unless path.start_with?(File::SEPARATOR, "\0")
       gem_path = @gem_paths.find { |root| inside?(path, root) }
-      return replace(path, gem_path, "$GEM_HOME") if gem_path
+      return self.class.normalize_build_temporaries(replace(path, gem_path, "$GEM_HOME")) if gem_path
       return replace(path, @cwd, "$PWD") if inside?(path, @cwd)
       return replace(path, @home, "$HOME") if inside?(path, @home)
       if inside?(path, @tmpdir)
         return "$TMPDIR" if path == @tmpdir
 
-        return path.sub(%r{\A#{Regexp.escape(@tmpdir)}/[^/]+}, "$TMPDIR/<random>")
+        return self.class.normalize_build_temporaries(path.sub(%r{\A#{Regexp.escape(@tmpdir)}/[^/]+}, "$TMPDIR/<random>"))
       end
 
       path.sub(%r{\A/proc/(?:\d+|self|thread-self)/task/\d+(?=/|\z)}, "/proc/<pid>/task/<tid>")
@@ -30,6 +30,11 @@ module Bonebed
     def scrub(text)
       # Match complete absolute path tokens, including flag values and path lists.
       text.gsub(%r{(?<![\w/])/(?:[^\s"'=:;,]+)}) { |path| call(path) }
+    end
+
+    def self.normalize_build_temporaries(path)
+      path.sub(%r{\A(\$TMPDIR/<random>/)cc[A-Za-z0-9]{6}(?=(?:\.cdtor)?\.(?:c|o|s|res)\z)}) { "#{Regexp.last_match(1)}cc<random>" }
+        .sub(%r{\A(\$GEM_HOME/gems/[^/]+/ext/(?:[^/]+/)*)\.gem\.\d{8}-\d+-[a-z0-9]+(?=/|\z)}) { "#{Regexp.last_match(1)}.gem.<random>" }
     end
 
     private

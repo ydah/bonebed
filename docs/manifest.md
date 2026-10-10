@@ -86,6 +86,13 @@ not a verified successful exit.
 | `stdout_truncated`, `stderr_truncated` | Whether captured output exceeded its configured limit |
 | `canary_hits` | Decoy source and location where its token was observed |
 
+Native-build normalization replaces GCC's six-character temporary basename under
+`$TMPDIR/<random>/` with `cc<random>`, retaining `.c`, `.o`, `.s`, `.res`, and `.cdtor` suffixes.
+RubyGems staging directories matching `.gem.YYYYMMDD-PID-random` below a package's `ext/`
+directory become `.gem.<random>`; their child paths remain intact. These are scoped filename
+conventions, not proof of which process created a file. Other directories and names remain unchanged.
+Diffs apply the same rules to older manifests and preserve operation kinds and counts.
+
 Paths can use `$HOME`, `$PWD`, `$GEM_HOME`, and `$TMPDIR` placeholders. These refer to the observed
 environment, not necessarily the reader's current environment. Sensitive nonexistent reads remain
 visible, while routine nonexistent read probes are discarded. The `self` category does not remove

@@ -73,7 +73,8 @@ of the same workflow and branch, searching at most the latest 100 successful run
 job has `actions: read`; target execution receives no GitHub token. Downloads have deadlines and require
 matching workflow, repository, run, and artifact metadata. The JSON comparison artifact records missing
 history, invalid inputs, failed observations, and incompatible contexts explicitly; it creates no issues
-or external notifications. The new hosted comparison job has not yet been verified.
+or external notifications. The [hosted validation record](validation.md) includes a successful
+comparison with the previous workflow's observations.
 Older successful runs without a benchmark still provide observation history; their benchmark result
 is explicitly `no_previous_benchmark`. Missing current artifacts or invalid existing artifacts fail retrieval.
 

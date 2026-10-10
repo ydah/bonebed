@@ -1,5 +1,9 @@
 # Local validation record
 
+The final local Linux suite on October 10 passed 383 examples with no failures and 91.82% line
+coverage, including Standard checks. One real delegated-cgroup example remains pending because
+the development container's cgroup mount is not writable and delegated.
+
 On 2026-10-08, a production-image snapshot built from this checkout observed the current RubyGems
 top 20 in a read-only container, with the bundled seccomp profile, no capabilities, an unprivileged
 UID, a 2 GiB memory limit, two workers, and `--phase all --offline --timeout 60`.
@@ -57,3 +61,34 @@ Docker Hub's API confirmed amd64 and arm64 variants for the pinned Ruby 3.3/3.4 
 digests. Pulling the new Ruby 3.3 digest locally timed out during the registry TLS handshake, so the
 Ruby 3.3 build above used its existing local base image. Release-image publishing and a build of that
 exact newer base digest remain separate checks.
+
+## Before/after observations and benchmark
+
+The same development container compared `6494f75` with the October 10 implementation using pinned
+rainbow 3.1.1 and json 3.0.2, `--phase all --offline`. All eight observations completed with no target
+or observer errors. The native json build gained working-directory attribution to json 3.0.2.
+Capability comparisons, including counts, were unchanged after applying the scoped native-build
+temporary-name normalization to both versions. Without that normalization, compiler and RubyGems
+staging names alone produced 336 added and 336 removed keys for json installation.
+
+| Gem and phase | Before observation time | After observation time |
+| --- | --- | --- |
+| rainbow install | 203 ms | 203 ms |
+| rainbow require | 42 ms | 63 ms |
+| json install | 6,703 ms | 6,977 ms |
+| json require | 64 ms | 62 ms |
+
+These are single observations, not statistically established performance differences. The fixed
+1,000-read benchmark on the same Ruby 4.0.6 / aarch64 / Linux 6.8.0 host used three samples per
+revision: observed-time medians were 305 ms before and 326 ms after; median observed/plain ratios
+were 3.24 and 3.54. Each recorded 2,770 notifications. This measures a synthetic workload and does
+not establish the roadmap's release overhead budget.
+
+## Hosted nightly validation
+
+[Run 38024026774](https://github.com/ydah/bonebed/actions/runs/38024026774), on `133b4ba`, passed the
+fixture, production-container top-20 survey, and comparison jobs. Its retained comparison had 40
+compared observations and no input errors. The previous successful workflow predated benchmark
+artifacts, so the benchmark result correctly recorded `no_previous_benchmark` rather than failing
+or inventing a measurement. An actual same-environment two-run benchmark comparison still needs
+a later matching hosted run.

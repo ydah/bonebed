@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "capability_keys"
+require_relative "path_normalizer"
 
 module Bonebed
   module ManifestDiff
@@ -31,6 +32,7 @@ module Bonebed
           key = key.gsub(prefix) { "#{Regexp.last_match(1)}#{replacement}" }
         end
         key = key.gsub(%r{(\$TMPDIR/[^:]*?/)[0-9a-f]{64}\.gem(?=:|\z)}) { "#{Regexp.last_match(1)}<package>.gem" }
+        key = key.gsub(%r{\$(?:GEM_HOME|TMPDIR)/[^:]+}) { |path| PathNormalizer.normalize_build_temporaries(path) }
         normalized[key] += count
       end
     end

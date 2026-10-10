@@ -78,6 +78,26 @@ RSpec.describe "manifest analysis" do
     expect(Bonebed::ManifestDiff.call(before, after)["added"]).to contain_exactly("file:read:$GEM_HOME/gems/demo-<version>/lib/extra.rb", "file:read:/etc/shadow")
   end
 
+  it "compares historical build temporary names while retaining operations and file suffixes" do
+    before = Marshal.load(Marshal.dump(manifest))
+    after = Marshal.load(Marshal.dump(manifest))
+    [before, after].zip(%w[Ab3dE9 Zy8aB1], %w[20261010-22-lkwiu3 20261011-99-abcd1]).each do |data, compiler, staging|
+      data["files"]["write"] += ["$TMPDIR/<random>/cc#{compiler}.cdtor.o",
+        "$GEM_HOME/gems/demo-1.2.3/ext/parser/.gem.#{staging}/lib/parser.so"]
+      data["files"]["rename"] = [{"from" => "$TMPDIR/<random>/cc#{compiler}.o", "to" => "$TMPDIR/<random>/cc#{compiler}.s", "count" => 2}]
+    end
+    expect(Bonebed::ManifestDiff.call(before, after, counts: true)).to eq("added" => [], "removed" => [], "counts" => {})
+    after["files"]["write"] << "$TMPDIR/<random>/ccXy1aB9.c"
+    after["files"]["delete"] = ["$TMPDIR/<random>/ccZy8aB1.cdtor.o"]
+    after["files"]["write"] << "$PWD/ccXy1aB9.o"
+    expect(Bonebed::ManifestDiff.call(before, after)["added"]).to contain_exactly(
+      "file:write:$TMPDIR/<random>/cc<random>.c", "file:delete:$TMPDIR/<random>/cc<random>.cdtor.o", "file:write:$PWD/ccXy1aB9.o"
+    )
+    after["files"]["rename"].first["count"] = 3
+    expect(Bonebed::ManifestDiff.call(before, after, counts: true)["counts"])
+      .to include("file:rename:$TMPDIR/<random>/cc<random>.o:$TMPDIR/<random>/cc<random>.s" => {"before" => 2, "after" => 3})
+  end
+
   it "rejects malformed manifests instead of silently skipping capabilities" do
     [{"schema_version" => 8}, manifest.merge("network" => "invalid"), manifest.merge("files" => {"read" => 1})].each do |invalid|
       expect { Bonebed::CapabilityKeys.call(invalid) }.to raise_error(ArgumentError)
