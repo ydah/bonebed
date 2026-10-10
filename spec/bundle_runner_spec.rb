@@ -141,6 +141,8 @@ RSpec.describe Bonebed::BundleRunner do
     specification = Gem.loaded_specs.fetch("bundler")
     allow(specification).to receive(:full_gem_path).and_return(File.join(@root, "missing-bundler"))
     allow(specification).to receive(:default_gem?).and_return(false)
+    # Bundler 2's genuine stdlib metadata spec is also nondefault; model an external gem here.
+    allow(specification).to receive(:loaded_from).and_return(File.join(@root, "specifications", "bundler.gemspec"))
     runner = described_class.new
     Bonebed::GemEnvironment.open do |environment|
       expect(environment).to receive(:copy_specification).with(specification).and_raise(Errno::ENOENT)

@@ -59,11 +59,12 @@ RSpec.describe Bonebed::Isolation do
         described_class.offline!
         socket = UDPSocket.new
         socket.bind("127.0.0.1", 0)
-        socket.send(:loopback, 0, "127.0.0.1", socket.addr[1])
+        # UDPSocket#send needs payload bytes, not a method name for Object#send.
+        socket.send("loopback", 0, "127.0.0.1", socket.addr[1]) # standard:disable Performance/StringIdentifierArgument
         raise "loopback failed" unless IO.select([socket], nil, nil, 1) && socket.recv(32) == "loopback"
 
         begin
-          socket.send(:probe, 0, "192.0.2.1", 9)
+          socket.send("probe", 0, "192.0.2.1", 9) # standard:disable Performance/StringIdentifierArgument
           writer.write("unexpected external UDP success")
         rescue Errno::ENETUNREACH
           writer.write("isolated")
