@@ -10,5 +10,5 @@ gem "json_schemer", require: false
 gem "rake", "~> 13.0"
 
 gem "rspec", "~> 3.0"
-gem "simplecov", "~> 0.22.0", require: false
+gem "simplecov", "~> 1.2.0", require: false
 gem "standard"
