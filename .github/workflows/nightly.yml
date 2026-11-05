@@ -24,7 +24,7 @@ jobs:
       - name: Measure the fixed benchmark workload
         run: bundle exec ruby -Ilib script/bench.rb > benchmark.json
       - name: Preserve benchmark environment and samples
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-benchmark
           path: benchmark.json
@@ -56,7 +56,7 @@ jobs:
             bonebed-nightly survey --top 20 --phase all --jobs 2 --offline --quiet-target --results /results
       - name: Preserve observations including target failures
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-observations
           path: results/
@@ -85,7 +85,7 @@ jobs:
         run: bundle exec ruby -Ilib script/nightly_compare.rb nightly-comparison.json
       - name: Preserve comparison including missing history and errors
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-comparison
           path: nightly-comparison.json
